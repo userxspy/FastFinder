@@ -11,7 +11,7 @@ from hydrogram.errors import MessageNotModified, MessageIdInvalid, BadRequest, L
 
 from info import ADMINS, LOG_CHANNEL
 from database.users_chats_db import db
-from database.ia_filterdb import db_count_documents, delete_files
+from database.ia_filterdb import db_count_documents, delete_files, delete_all_files, delete_file_by_id, delete_by_quality
 from utils import get_size, get_readable_time, temp
 
 
@@ -176,6 +176,41 @@ def premium_panel_buttons():
     ])
 
 
+def delete_panel_buttons():
+    """Delete files management panel"""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔍 Delete by Keyword", callback_data="del_keyword"),
+            InlineKeyboardButton("📹 Delete by Quality", callback_data="del_quality")
+        ],
+        [
+            InlineKeyboardButton("🗑 Delete ALL Files", callback_data="del_all_confirm")
+        ],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data="admin_back")
+        ]
+    ])
+
+
+def delete_quality_buttons():
+    """Quality selection for deletion"""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("360p", callback_data="delq_360p"),
+            InlineKeyboardButton("480p", callback_data="delq_480p"),
+            InlineKeyboardButton("720p", callback_data="delq_720p")
+        ],
+        [
+            InlineKeyboardButton("1080p", callback_data="delq_1080p"),
+            InlineKeyboardButton("1440p", callback_data="delq_1440p"),
+            InlineKeyboardButton("2160p", callback_data="delq_2160p")
+        ],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data="admin_delete")
+        ]
+    ])
+
+
 # ======================================================
 # 🚀 /admin COMMAND - UNIFIED PANEL
 # ======================================================
@@ -219,16 +254,15 @@ async def admin_callbacks(bot, query: CallbackQuery):
         )
         await safe_answer(query)
 
-    # Delete files
+    # Delete files panel
     elif action == "admin_delete":
+        file_count = await asyncio.to_thread(db_count_documents)
         await safe_edit(
             query.message,
-            "🗑 <b>Delete Files</b>\n\n"
-            "Use command:\n<code>/delete keyword</code>\n\n"
-            "This will delete all files matching the keyword.",
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("🔙 Back", callback_data="admin_back")]]
-            )
+            "🗑 <b>Delete Files Management</b>\n\n"
+            f"📦 Total Files: <code>{file_count}</code>\n\n"
+            "Choose deletion method:",
+            reply_markup=delete_panel_buttons()
         )
         await safe_answer(query)
 
@@ -246,6 +280,134 @@ async def admin_callbacks(bot, query: CallbackQuery):
         text = await build_dashboard()
         await safe_edit(query.message, text, reply_markup=admin_panel_buttons())
         await safe_answer(query)
+
+
+# ======================================================
+# 🗑 DELETE CALLBACKS
+# ======================================================
+
+@Client.on_callback_query(filters.regex("^del_"))
+async def delete_callbacks(bot, query: CallbackQuery):
+    if query.from_user.id not in ADMINS:
+        return await safe_answer(query, "Admins only", True)
+
+    action = query.data
+
+    # Delete by keyword
+    if action == "del_keyword":
+        await safe_edit(
+            query.message,
+            "🔍 <b>Delete Files by Keyword</b>\n\n"
+            "Use command:\n<code>/delete keyword</code>\n\n"
+            "Example: <code>/delete movie_name</code>\n\n"
+            "This will delete all files matching the keyword.",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("🔙 Back", callback_data="admin_delete")]]
+            )
+        )
+        await safe_answer(query)
+
+    # Delete by quality
+    elif action == "del_quality":
+        await safe_edit(
+            query.message,
+            "📹 <b>Delete Files by Quality</b>\n\n"
+            "Select quality to delete all files of that quality:",
+            reply_markup=delete_quality_buttons()
+        )
+        await safe_answer(query)
+
+    # Delete ALL confirmation
+    elif action == "del_all_confirm":
+        file_count = await asyncio.to_thread(db_count_documents)
+        await safe_edit(
+            query.message,
+            f"⚠️ <b>WARNING: Delete ALL Files</b>\n\n"
+            f"📦 Total Files: <code>{file_count}</code>\n\n"
+            f"❗ This will permanently delete ALL {file_count} files from the database!\n\n"
+            "Are you absolutely sure?",
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("✅ Yes, Delete ALL", callback_data="del_all_execute"),
+                    InlineKeyboardButton("❌ Cancel", callback_data="admin_delete")
+                ]
+            ])
+        )
+        await safe_answer(query)
+
+    # Execute delete ALL
+    elif action == "del_all_execute":
+        await safe_answer(query, "🗑 Deleting all files...", True)
+        msg = await query.message.edit("⏳ Deleting all files from database...")
+        
+        try:
+            count = await delete_all_files()
+            await msg.edit(
+                f"✅ <b>Successfully Deleted ALL Files</b>\n\n"
+                f"🗑 Deleted: <code>{count}</code> files\n"
+                f"🕒 Time: <code>{fmt(datetime.utcnow())}</code>",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("🔙 Back to Dashboard", callback_data="admin_back")]]
+                )
+            )
+            
+            # Log to channel
+            try:
+                await bot.send_message(
+                    LOG_CHANNEL,
+                    f"🗑 <b>ALL FILES DELETED</b>\n\n"
+                    f"👤 Admin: {query.from_user.mention}\n"
+                    f"🗑 Deleted: <code>{count}</code> files\n"
+                    f"🕒 Time: <code>{fmt(datetime.utcnow())}</code>"
+                )
+            except:
+                pass
+                
+        except Exception as e:
+            await msg.edit(f"❌ Error deleting files: {e}")
+
+
+# ======================================================
+# 📹 DELETE BY QUALITY CALLBACKS
+# ======================================================
+
+@Client.on_callback_query(filters.regex("^delq_"))
+async def delete_quality_callbacks(bot, query: CallbackQuery):
+    if query.from_user.id not in ADMINS:
+        return await safe_answer(query, "Admins only", True)
+
+    quality = query.data.replace("delq_", "")
+    
+    await safe_answer(query, f"🗑 Deleting {quality} files...", True)
+    msg = await query.message.edit(f"⏳ Deleting all {quality} files...")
+    
+    try:
+        count = await delete_by_quality(quality)
+        await msg.edit(
+            f"✅ <b>Deleted {quality} Files</b>\n\n"
+            f"🗑 Deleted: <code>{count}</code> files\n"
+            f"📹 Quality: <code>{quality}</code>\n"
+            f"🕒 Time: <code>{fmt(datetime.utcnow())}</code>",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("🔙 Back", callback_data="admin_delete")]]
+            )
+        )
+        
+        # Log to channel
+        try:
+            await bot.send_message(
+                LOG_CHANNEL,
+                f"🗑 <b>Files Deleted by Quality</b>\n\n"
+                f"👤 Admin: {query.from_user.mention}\n"
+                f"📹 Quality: <code>{quality}</code>\n"
+                f"🗑 Deleted: <code>{count}</code> files\n"
+                f"🕒 Time: <code>{fmt(datetime.utcnow())}</code>"
+            )
+        except:
+            pass
+            
+    except Exception as e:
+        await msg.edit(f"❌ Error: {e}")
 
 
 # ======================================================
@@ -267,7 +429,6 @@ async def premium_callbacks(bot, query: CallbackQuery):
         days = int(action.split("_")[-1])
         limit = now + timedelta(days=days)
 
-        # FIX 1: await the coroutine
         users = await db.get_premium_users()
         result = []
 
@@ -311,7 +472,6 @@ async def premium_callbacks(bot, query: CallbackQuery):
 
     # Expiry chart
     elif action == "prm_chart":
-        # FIX 2: await the coroutine
         users = await db.get_premium_users()
         c_3 = c_7 = c_30 = c_30p = 0
 
@@ -362,7 +522,7 @@ async def premium_callbacks(bot, query: CallbackQuery):
             )
         )
 
-    # Add premium (placeholder)
+    # Add premium
     elif action == "prm_add":
         await safe_edit(
             query.message,
@@ -374,7 +534,7 @@ async def premium_callbacks(bot, query: CallbackQuery):
             )
         )
 
-    # Remove premium (placeholder)
+    # Remove premium
     elif action == "prm_remove":
         await safe_edit(
             query.message,
@@ -386,7 +546,7 @@ async def premium_callbacks(bot, query: CallbackQuery):
             )
         )
 
-    # Extend premium (placeholder)
+    # Extend premium
     elif action == "prm_extend":
         await safe_edit(
             query.message,
@@ -404,7 +564,7 @@ async def premium_callbacks(bot, query: CallbackQuery):
 # ======================================================
 
 @Client.on_message(filters.command("delete") & filters.user(ADMINS))
-async def delete_cmd(_, message):
+async def delete_cmd(bot, message):
     if len(message.command) < 2:
         return await message.reply(
             "❌ <b>Usage:</b> <code>/delete keyword</code>\n\n"
@@ -414,9 +574,84 @@ async def delete_cmd(_, message):
     key = message.text.split(" ", 1)[1].strip()
     msg = await message.reply(f"⏳ Deleting files for `{key}`...")
     
-    count = await asyncio.to_thread(delete_files, key)
+    try:
+        count = await delete_files(key)
+        await msg.edit(
+            f"✅ <b>Files Deleted</b>\n\n"
+            f"🗑 Deleted: <code>{count}</code> files\n"
+            f"🔍 Keyword: <code>{key}</code>\n"
+            f"🕒 Time: <code>{fmt(datetime.utcnow())}</code>"
+        )
+        
+        # Log to channel
+        try:
+            await bot.send_message(
+                LOG_CHANNEL,
+                f"🗑 <b>Files Deleted</b>\n\n"
+                f"👤 Admin: {message.from_user.mention}\n"
+                f"🔍 Keyword: <code>{key}</code>\n"
+                f"🗑 Deleted: <code>{count}</code> files\n"
+                f"🕒 Time: <code>{fmt(datetime.utcnow())}</code>"
+            )
+        except:
+            pass
+            
+    except Exception as e:
+        await msg.edit(f"❌ Error: {e}")
+
+
+# ======================================================
+# 🗑 DELETE ALL FILES COMMAND (Alternative)
+# ======================================================
+
+@Client.on_message(filters.command("deleteall") & filters.user(ADMINS))
+async def delete_all_cmd(bot, message):
+    file_count = await asyncio.to_thread(db_count_documents)
     
-    await msg.edit(f"✅ Successfully deleted <code>{count}</code> files matching `{key}`")
+    msg = await message.reply(
+        f"⚠️ <b>WARNING: Delete ALL Files</b>\n\n"
+        f"📦 Total Files: <code>{file_count}</code>\n\n"
+        f"❗ This will permanently delete ALL {file_count} files!\n\n"
+        "Reply with 'CONFIRM DELETE ALL' to proceed.",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("❌ Cancel", callback_data="close_data")]
+        ])
+    )
+    
+    try:
+        # Wait for confirmation reply
+        response = await bot.listen(message.chat.id, filters=filters.text, timeout=30)
+        
+        if response.text.strip().upper() == "CONFIRM DELETE ALL":
+            await response.delete()
+            await msg.edit("⏳ Deleting all files...")
+            
+            count = await delete_all_files()
+            
+            await msg.edit(
+                f"✅ <b>Successfully Deleted ALL Files</b>\n\n"
+                f"🗑 Deleted: <code>{count}</code> files\n"
+                f"🕒 Time: <code>{fmt(datetime.utcnow())}</code>"
+            )
+            
+            # Log to channel
+            try:
+                await bot.send_message(
+                    LOG_CHANNEL,
+                    f"🗑 <b>ALL FILES DELETED</b>\n\n"
+                    f"👤 Admin: {message.from_user.mention}\n"
+                    f"🗑 Deleted: <code>{count}</code> files\n"
+                    f"🕒 Time: <code>{fmt(datetime.utcnow())}</code>"
+                )
+            except:
+                pass
+        else:
+            await msg.edit("❌ Deletion cancelled - incorrect confirmation.")
+            
+    except ListenerTimeout:
+        await msg.edit("❌ Deletion cancelled - timeout (30s).")
+    except Exception as e:
+        await msg.edit(f"❌ Error: {e}")
 
 
 # ======================================================
