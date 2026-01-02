@@ -117,3 +117,4 @@ class script(object):
         "• /stats – Bot statistics\n"
         "• /restart – Restart bot\n"
     )
+
