@@ -1,8 +1,10 @@
 import asyncio
 from datetime import datetime, timedelta
 from hydrogram import Client, filters, enums
-from hydrogram.types import ChatPermissions
+from hydrogram.types import ChatPermissions, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from database.users_chats_db import db
+from info import ADMINS
+from utils import temp
 
 # =========================
 # CONFIG
@@ -16,6 +18,7 @@ AUTO_MUTE_TIME = 600  # 10 minutes
 
 async def is_admin(client, chat_id, user_id):
     try:
+        if user_id in ADMINS: return True
         member = await client.get_chat_member(chat_id, user_id)
         return member.status in (
             enums.ChatMemberStatus.ADMINISTRATOR,
@@ -24,268 +27,210 @@ async def is_admin(client, chat_id, user_id):
     except:
         return False
 
-async def warn_user(user_id, chat_id):
-    data = await db.get_warn(user_id, chat_id) or {"count": 0}
-    data["count"] += 1
-    await db.set_warn(user_id, chat_id, data)
-    return data["count"]
-
-async def reset_warn(user_id, chat_id):
-    await db.clear_warn(user_id, chat_id)
-
 # =========================
-# ADMIN MODERATION (REPLY)
+# MODERATION (REPLY)
 # =========================
 
 @Client.on_message(filters.group & filters.reply & filters.command("mute"))
 async def mute_user(client, message):
-    if not await is_admin(client, message.chat.id, message.from_user.id):
-        return
+    if not await is_admin(client, message.chat.id, message.from_user.id): return
     user = message.reply_to_message.from_user
     until = datetime.utcnow() + timedelta(seconds=AUTO_MUTE_TIME)
-    await client.restrict_chat_member(
-        message.chat.id,
-        user.id,
-        ChatPermissions(),
-        until_date=until
-    )
-    await message.reply(f"🔇 {user.mention} has been muted")
+    try:
+        await client.restrict_chat_member(message.chat.id, user.id, ChatPermissions(), until_date=until)
+        await message.reply(f"🔇 {user.mention} muted for 10m.")
+    except Exception as e:
+        await message.reply(f"❌ Error: {e}")
 
 @Client.on_message(filters.group & filters.reply & filters.command("unmute"))
 async def unmute_user(client, message):
-    if not await is_admin(client, message.chat.id, message.from_user.id):
-        return
+    if not await is_admin(client, message.chat.id, message.from_user.id): return
     user = message.reply_to_message.from_user
-    await client.restrict_chat_member(
-        message.chat.id,
-        user.id,
-        ChatPermissions(can_send_messages=True)
-    )
-    await message.reply(f"🔊 {user.mention} has been unmuted")
+    try:
+        await client.restrict_chat_member(message.chat.id, user.id, ChatPermissions(can_send_messages=True))
+        await message.reply(f"🔊 {user.mention} unmuted.")
+    except Exception as e:
+        await message.reply(f"❌ Error: {e}")
 
 @Client.on_message(filters.group & filters.reply & filters.command("ban"))
 async def ban_user(client, message):
-    if not await is_admin(client, message.chat.id, message.from_user.id):
-        return
+    if not await is_admin(client, message.chat.id, message.from_user.id): return
     user = message.reply_to_message.from_user
-    await client.ban_chat_member(message.chat.id, user.id)
-    await message.reply(f"🚫 {user.mention} has been banned")
-
-@Client.on_message(filters.group & filters.reply & filters.command("warn"))
-async def warn_cmd(client, message):
-    if not await is_admin(client, message.chat.id, message.from_user.id):
-        return
-    user = message.reply_to_message.from_user
-    warns = await warn_user(user.id, message.chat.id)
-    await message.reply(f"⚠️ {user.mention} warned ({warns}/{MAX_WARNS})")
-
-@Client.on_message(filters.group & filters.reply & filters.command("resetwarn"))
-async def resetwarn_cmd(client, message):
-    if not await is_admin(client, message.chat.id, message.from_user.id):
-        return
-    user = message.reply_to_message.from_user
-    await reset_warn(user.id, message.chat.id)
-    await message.reply(f"♻️ Warnings reset for {user.mention}")
+    try:
+        await client.ban_chat_member(message.chat.id, user.id)
+        await message.reply(f"🚫 {user.mention} banned.")
+    except Exception as e:
+        await message.reply(f"❌ Error: {e}")
 
 # =========================
 # BLACKLIST SYSTEM
 # =========================
 
 @Client.on_message(filters.group & filters.command("addblacklist"))
-async def add_blacklist(client, message):
-    if not await is_admin(client, message.chat.id, message.from_user.id):
-        return
-    if len(message.command) < 2:
-        return
-
+async def add_bl(client, message):
+    if not await is_admin(client, message.chat.id, message.from_user.id): return
+    if len(message.command) < 2: return await message.reply("❌ Usage: `/addblacklist word`")
+    
     word = message.text.split(None, 1)[1].lower()
-    data = await db.get_settings(message.chat.id) or {}
-
-    blacklist = data.get("blacklist", [])
-    blacklist.append(word)
-
-    data["blacklist"] = list(set(blacklist))
-    data.setdefault("blacklist_warn", True)
-    await db.update_settings(message.chat.id, data)
+    data = await db.get_settings(message.chat.id)
+    bl = data.get("blacklist", [])
+    
+    if word not in bl:
+        bl.append(word)
+        data["blacklist"] = bl
+        await db.update_settings(message.chat.id, data)
+        await message.reply(f"✅ Added `{word}` to blacklist.")
+    else:
+        await message.reply("⚠️ Already in blacklist.")
 
 @Client.on_message(filters.group & filters.command("removeblacklist"))
-async def remove_blacklist(client, message):
-    if not await is_admin(client, message.chat.id, message.from_user.id):
-        return
-    if len(message.command) < 2:
-        return
-
+async def rem_bl(client, message):
+    if not await is_admin(client, message.chat.id, message.from_user.id): return
     word = message.text.split(None, 1)[1].lower()
-    data = await db.get_settings(message.chat.id) or {}
-    blacklist = data.get("blacklist", [])
-
-    if word in blacklist:
-        blacklist.remove(word)
-        data["blacklist"] = blacklist
+    data = await db.get_settings(message.chat.id)
+    bl = data.get("blacklist", [])
+    
+    if word in bl:
+        bl.remove(word)
+        data["blacklist"] = bl
         await db.update_settings(message.chat.id, data)
-
-@Client.on_message(filters.group & filters.command("blacklist"))
-async def view_blacklist(client, message):
-    if not await is_admin(client, message.chat.id, message.from_user.id):
-        return
-
-    data = await db.get_settings(message.chat.id) or {}
-    blacklist = data.get("blacklist", [])
-
-    if not blacklist:
-        return await message.reply("📭 Blacklist is empty")
-
-    await message.reply("\n".join(f"• `{w}`" for w in blacklist))
-
-@Client.on_message(filters.group & filters.command("blacklistwarn"))
-async def blacklistwarn(client, message):
-    if not await is_admin(client, message.chat.id, message.from_user.id):
-        return
-    if len(message.command) < 2:
-        return
-
-    data = await db.get_settings(message.chat.id) or {}
-    data["blacklist_warn"] = message.command[1] == "on"
-    await db.update_settings(message.chat.id, data)
-
-@Client.on_message(filters.group & filters.text)
-async def blacklist_filter(client, message):
-    if not message.from_user:
-        return
-    if await is_admin(client, message.chat.id, message.from_user.id):
-        return
-
-    data = await db.get_settings(message.chat.id) or {}
-    blacklist = data.get("blacklist", [])
-    warn_on = data.get("blacklist_warn", True)
-    text = message.text.lower()
-
-    for word in blacklist:
-        if (word.endswith("*") and text.startswith(word[:-1])) or (word in text):
-            await message.delete()
-            if warn_on:
-                await warn_user(message.from_user.id, message.chat.id)
-            return
+        await message.reply(f"✅ Removed `{word}` from blacklist.")
+    else:
+        await message.reply("⚠️ Not found in blacklist.")
 
 # =========================
-# DLINK (DELAYED DELETE)
+# DLINK (DELAYED DELETE) - UPDATED
 # =========================
 
 @Client.on_message(filters.group & filters.command("dlink"))
 async def add_dlink(client, message):
-    if not await is_admin(client, message.chat.id, message.from_user.id):
-        return
-
+    if not await is_admin(client, message.chat.id, message.from_user.id): return
+    
     args = message.text.split()
-    delay = 300  # default 5 min
-    index = 1
-
-    if len(args) > 2 and args[1][-1] in ("m", "h") and args[1][:-1].isdigit():
-        delay = int(args[1][:-1]) * (60 if args[1][-1] == "m" else 3600)
-        index = 2
-
-    word = " ".join(args[index:]).lower()
-    data = await db.get_settings(message.chat.id) or {}
-    dlink = data.get("dlink", {})
-
-    dlink[word] = delay
-    data["dlink"] = dlink
+    if len(args) < 2: return await message.reply("❌ Usage: `/dlink word` or `/dlink 10m word`")
+    
+    delay = 300 # Default 5m
+    idx = 1
+    
+    # Check if time provided
+    if args[1][-1] in ['m', 'h'] and args[1][:-1].isdigit():
+        val = int(args[1][:-1])
+        delay = val * 60 if args[1][-1] == 'm' else val * 3600
+        idx = 2
+        
+    word = " ".join(args[idx:]).lower()
+    if not word: return await message.reply("❌ Word required")
+    
+    data = await db.get_settings(message.chat.id)
+    dl = data.get("dlink", {})
+    dl[word] = delay
+    data["dlink"] = dl
+    
     await db.update_settings(message.chat.id, data)
-
-@Client.on_message(filters.group & filters.command("removedlink"))
-async def remove_dlink(client, message):
-    if not await is_admin(client, message.chat.id, message.from_user.id):
-        return
-
-    word = message.text.split(None, 1)[1].lower()
-    data = await db.get_settings(message.chat.id) or {}
-    dlink = data.get("dlink", {})
-
-    dlink.pop(word, None)
-    data["dlink"] = dlink
-    await db.update_settings(message.chat.id, data)
+    await message.reply(f"✅ DLink added for `{word}` ({delay}s)")
 
 @Client.on_message(filters.group & filters.command("dlinklist"))
-async def dlink_list(client, message):
-    if not await is_admin(client, message.chat.id, message.from_user.id):
-        return
+async def list_dlink(client, message):
+    if not await is_admin(client, message.chat.id, message.from_user.id): return
+    data = await db.get_settings(message.chat.id)
+    dl = data.get("dlink", {})
+    
+    if not dl: return await message.reply("📭 Empty")
+    
+    txt = "📝 **DLink List:**\n\n"
+    for k, v in dl.items():
+        txt += f"• `{k}` ➔ {v}s\n"
+        
+    await message.reply(txt)
 
-    data = await db.get_settings(message.chat.id) or {}
-    dlink = data.get("dlink", {})
-
-    if not dlink:
-        return await message.reply("📭 Dlink list is empty")
-
-    await message.reply(
-        "\n".join(f"• `{k}` → {v//60}m" for k, v in dlink.items())
-    )
+# =========================
+# FILTER HANDLER (BL + DLINK)
+# =========================
 
 @Client.on_message(filters.group & filters.text)
-async def silent_dlink_handler(client, message):
-    data = await db.get_settings(message.chat.id) or {}
-    dlink = data.get("dlink", {})
-    text = message.text.lower()
+async def group_filters(client, message):
+    chat_id = message.chat.id
+    txt = message.text.lower()
+    
+    # Get Settings (Cached)
+    if chat_id in temp.SETTINGS:
+        data = temp.SETTINGS[chat_id]
+    else:
+        data = await db.get_settings(chat_id)
+        temp.SETTINGS[chat_id] = data
 
-    for word, delay in dlink.items():
-        if (word.endswith("*") and text.startswith(word[:-1])) or (word in text):
-            await asyncio.sleep(delay)
-            try:
-                await message.delete()
-            except:
-                pass
+    # 1. Blacklist Check (Skip Admins)
+    if not await is_admin(client, chat_id, message.from_user.id):
+        bl = data.get("blacklist", [])
+        for w in bl:
+            if w in txt:
+                try: await message.delete()
+                except: pass
+                return # Stop further processing
+
+    # 2. DLink Check (DELETE FOR EVERYONE)
+    dl = data.get("dlink", {})
+    for w, delay in dl.items():
+        if w in txt:
+            # Schedule Delete
+            asyncio.create_task(delayed_delete(message, delay))
             return
 
-# =========================
-# ANTI BOT PROTECTION
-# =========================
-
-@Client.on_message(filters.new_chat_members)
-async def anti_bot(client, message):
-    for user in message.new_chat_members:
-        if user.is_bot and not await is_admin(client, message.chat.id, message.from_user.id):
-            await client.ban_chat_member(message.chat.id, user.id)
+async def delayed_delete(msg, delay):
+    await asyncio.sleep(delay)
+    try: await msg.delete()
+    except: pass
 
 # =========================
-# HELP COMMAND (GROUP ADMIN ONLY)
+# CACHE CLEAR & BUTTONS
 # =========================
 
-@Client.on_message(filters.group & filters.command("help"))
-async def help_command(client, message):
-    if not await is_admin(client, message.chat.id, message.from_user.id):
-        return
+@Client.on_message(filters.command("clearcache") & filters.user(ADMINS))
+async def clear_cache_cmd(bot, message):
+    btn = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🧹 Clear Cache", callback_data="cls_cache"),
+         InlineKeyboardButton("❌ Close", callback_data="close_data")]
+    ])
+    await message.reply("⚙️ **System Maintenance**\n\nClick below to clear RAM cache.", reply_markup=btn)
 
-    help_text = (
-        "🛠️ **Admin Help Menu**\n"
-        "━━━━━━━━━━━━━━━━━━\n\n"
+@Client.on_callback_query(filters.regex("^cls_cache$"))
+async def clear_cache_cb(bot, query):
+    if query.from_user.id not in ADMINS:
+        return await query.answer("🔒 Admins Only", show_alert=True)
+        
+    # Clear RAM
+    temp.SETTINGS.clear()
+    temp.FILES.clear()
+    temp.PREMIUM.clear()
+    temp.KEYWORDS.clear()
+    
+    await query.answer("✅ Cache Cleared!", show_alert=True)
+    await query.message.edit("✅ **System Cache Cleared Successfully!**")
 
-        "👮 **Moderation (Reply Required):**\n"
-        "🔇 `/mute` – Mute a user (10 minutes)\n"
-        "🔊 `/unmute` – Unmute a user\n"
-        "🚫 `/ban` – Ban a user from group\n"
-        "⚠️ `/warn` – Give a warning\n"
-        "♻️ `/resetwarn` – Reset user warnings\n\n"
+# =========================
+# PREMIUM APPROVAL BUTTONS
+# =========================
 
-        "🚫 **Blacklist System:**\n"
-        "➕ `/addblacklist <word/link>` – Add to blacklist\n"
-        "➖ `/removeblacklist <word/link>` – Remove from blacklist\n"
-        "📃 `/blacklist` – View blacklist\n"
-        "⚙️ `/blacklistwarn on | off` – Warn on blacklist match\n\n"
+@Client.on_message(filters.command("approve") & filters.reply & filters.user(ADMINS))
+async def approve_user_cmd(bot, message):
+    user = message.reply_to_message.from_user
+    btn = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Approve", callback_data=f"ap_ok_{user.id}"),
+         InlineKeyboardButton("❌ Reject", callback_data=f"ap_no_{user.id}")]
+    ])
+    await message.reply(f"👤 **User:** {user.mention}\n\nApprove access?", reply_markup=btn)
 
-        "⏱️ **Delayed Delete (DLINK):**\n"
-        "🕒 `/dlink <word>` – Delete after 5 minutes\n"
-        "🕒 `/dlink 10m <word>` – Delete after 10 minutes\n"
-        "🕒 `/dlink 1h <word>` – Delete after 1 hour\n"
-        "🗑️ `/removedlink <word>` – Remove delayed delete rule\n"
-        "📃 `/dlinklist` – View delayed delete list\n\n"
+@Client.on_callback_query(filters.regex("^ap_ok_"))
+async def approve_cb(bot, query):
+    uid = int(query.data.split("_")[2])
+    # Logic to approve (e.g., add to premium DB) is handled in premium.py mostly
+    # Here we just show a placeholder
+    await query.answer("✅ Approved")
+    await query.message.edit(f"✅ User `{uid}` Approved!")
 
-        "🤖 **Auto Protection:**\n"
-        "• Anti-bot system is enabled\n"
-        "• Only admins can add bots\n\n"
+@Client.on_callback_query(filters.regex("^ap_no_"))
+async def reject_cb(bot, query):
+    uid = int(query.data.split("_")[2])
+    await query.answer("❌ Rejected")
+    await query.message.edit(f"❌ User `{uid}` Rejected!")
 
-        "⚠️ **Notes:**\n"
-        "• Admin commands work only in groups\n"
-        "• Some commands must be used as a reply\n"
-        "• `/help` is admin-only\n"
-    )
-
-    await message.reply(help_text)
