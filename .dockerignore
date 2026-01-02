@@ -1,5 +1,43 @@
+# 1. Python Cache & Compiled Files
 __pycache__/
-*.pyc
-.git/
-.env
+*.py[cod]
+*$py.class
+
+# 2. Virtual Environment (Most Important)
 venv/
+env/
+.venv/
+
+# 3. Environment Variables (Security)
+.env
+.env.save
+.env.bak
+
+# 4. Git & Version Control
+.git/
+.gitignore
+.github/
+
+# 5. IDE & System Files (Mac/Windows garbage)
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# 6. Telegram Session Files (Security Risk)
+# अगर session फाइल इमेज में चली गई तो कभी-कभी login conflict होता है
+*.session
+*.session-journal
+
+# 7. Logs & Databases
+*.log
+logs/
+# अगर तुम MongoDB युज कर रहे हो तो local sqlite फाइल की जरूरत नहीं
+*.db
+*.sqlite
+*.sqlite3
+
+# 8. Temporary Downloads (Image Size कम रखने के लिए)
+downloads/
+cache/
+tmp/
