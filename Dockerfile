@@ -1,25 +1,33 @@
-# 1. सबसे लेटेस्ट और स्टेबल बेस इमेज का उपयोग
+# 1. सबसे लाइटवेट और फास्ट बेस इमेज
 FROM python:3.11-slim-bookworm
 
-# 2. सिस्टम डिपेंडेंसीज इंस्टॉल करना (जरूरी टूल्स)
+# 2. एनवायरनमेंट वैरिएबल्स (Koyeb लॉग्स और स्पीड के लिए जरूरी)
+# PYTHONUNBUFFERED=1 : लॉग्स तुरंत दिखेंगे (Koyeb पर लैग नहीं होगा)
+# PYTHONDONTWRITEBYTECODE=1 : .pyc फाइल्स नहीं बनेंगी (स्टोरेज बचाएगा)
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# 3. सिस्टम टूल्स + FFmpeg (वीडियो थंबनेल और इन्फो के लिए बहुत जरूरी)
 RUN apt-get update && apt-get install -y \
     git \
     gcc \
     python3-dev \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# 3. वर्किंग डायरेक्टरी सेट करना
+# 4. वर्किंग डायरेक्टरी
 WORKDIR /app
 
-# 4. पहले requirements.txt कॉपी करें (कैश का फायदा लेने के लिए)
+# 5. कैशिंग का फायदा उठाने के लिए पहले requirements कॉपी करें
 COPY requirements.txt .
 
-# 5. बिना कैश के डिपेंडेंसीज इंस्टॉल करें और pip को अपडेट करें
+# 6. फास्ट इंस्टॉलेशन (बिना कैश जमा किए)
 RUN pip install --no-cache-dir -U pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# 6. अब बाकी का पूरा कोड कॉपी करें
+# 7. बाकी कोड कॉपी करें
 COPY . .
 
-# 7. बॉट स्टार्ट करने की कमांड
+# 8. बॉट स्टार्ट कमांड
 CMD ["python3", "bot.py"]
+
