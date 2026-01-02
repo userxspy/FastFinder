@@ -15,7 +15,7 @@ from utils import get_readable_time
 # =====================================================
 LOCK = asyncio.Lock()
 CANCEL = False
-WAITING_SKIP = {}   # 🔥 FIX: skip state
+WAITING_SKIP = {} 
 
 # =====================================================
 # RESUME DB
@@ -54,7 +54,7 @@ async def send_log(bot, text):
         pass
 
 # =====================================================
-# ENTRY POINT (OLD PYROGRAM BEHAVIOR)
+# ENTRY POINT
 # forward / link → index
 # =====================================================
 @Client.on_message(filters.private & filters.user(ADMINS) & filters.incoming)
@@ -102,7 +102,7 @@ async def start_index(bot, message):
     return
 
 # =====================================================
-# HANDLE SKIP INPUT (FIXED)
+# HANDLE SKIP INPUT
 # =====================================================
 @Client.on_message(filters.private & filters.user(ADMINS) & filters.text)
 async def handle_skip(bot, message):
@@ -168,7 +168,7 @@ async def index_callback(bot, query):
         )
 
 # =====================================================
-# CORE INDEX LOOP
+# CORE INDEX LOOP (FIXED & OPTIMIZED)
 # =====================================================
 async def index_worker(bot, status, chat_id, last_msg_id, skip, channel_title):
     global CANCEL
@@ -177,11 +177,16 @@ async def index_worker(bot, status, chat_id, last_msg_id, skip, channel_title):
     saved = dup = err = nomedia = 0
     processed = 0
 
-    resume_from = get_resume(chat_id)
-    current_id = resume_from if resume_from else (last_msg_id - skip)
+    # 🔥 FIX 1: पुराने Resume ID को "STOP POINT" बनाओ
+    old_resume_id = get_resume(chat_id)
+    stop_id = old_resume_id if old_resume_id else 0
+    
+    # 🔥 FIX 2: स्कैनिंग हमेशा लेटेस्ट मैसेज से शुरू करो
+    current_id = last_msg_id - skip
 
     try:
-        while current_id > 0:
+        # 🔥 FIX 3: लूप तब तक चलाओ जब तक पुराने स्टॉप पॉइंट तक न पहुंच जाओ
+        while current_id > stop_id:
             if CANCEL:
                 break
 
@@ -190,16 +195,18 @@ async def index_worker(bot, status, chat_id, last_msg_id, skip, channel_title):
             except FloodWait as e:
                 await asyncio.sleep(e.value)
                 continue
-            except:
+            except Exception:
+                # अगर मैसेज डिलीटेड है तो स्किप
                 current_id -= 1
                 continue
 
             processed += 1
 
+            # Status update (हर 50 msg पर)
             if processed % 50 == 0:
                 elapsed = time.time() - start_time
                 speed = processed / elapsed if elapsed else 0
-                eta = current_id / speed if speed else 0
+                eta = (current_id - stop_id) / speed if speed else 0
 
                 try:
                     btn = InlineKeyboardMarkup(
@@ -215,6 +222,7 @@ async def index_worker(bot, status, chat_id, last_msg_id, skip, channel_title):
                 except MessageNotModified:
                     pass
 
+            # Media Validation
             if not msg or not msg.media:
                 nomedia += 1
                 current_id -= 1
@@ -238,13 +246,18 @@ async def index_worker(bot, status, chat_id, last_msg_id, skip, channel_title):
 
             if res == "suc":
                 saved += 1
-                set_resume(chat_id, current_id)
             elif res == "dup":
                 dup += 1
             else:
                 err += 1
 
+            # अगला मैसेज चेक करो (Descending Order)
             current_id -= 1
+        
+        # 🔥 FIX 4: जब पूरा हो जाए, तो Resume ID को सबसे हाईएस्ट ID (last_msg_id) पर सेट करो
+        # ताकि अगली बार बोट को पता हो कि यहाँ तक स्कैन हो चुका है।
+        if not CANCEL:
+            set_resume(chat_id, last_msg_id)
 
     except Exception as e:
         await status.edit(f"❌ Failed: `{e}`")
@@ -283,3 +296,4 @@ async def stop_index(bot, query):
     global CANCEL
     CANCEL = True
     await query.answer("Stopping…", show_alert=True)
+
