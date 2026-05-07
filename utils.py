@@ -1,430 +1,156 @@
-import asyncio
-import time
-from datetime import datetime, timedelta
-
-from hydrogram.errors import FloodWait
-
+import asyncio, time
+from datetime import datetime, timedelta, timezone
+from hydrogram.errors import FloodWait, UserIsBlocked, PeerIdInvalid
 from info import ADMINS, IS_PREMIUM
 from database.users_chats_db import db
 
+# ======================================================
+# GLOBAL RUNTIME STATE
+# ======================================================
+class temp:
+    START_TIME = 0; BOT = ME = U_NAME = B_NAME = None
+    SETTINGS, FILES, PREMIUM, KEYWORDS, BANNED_USERS = {}, {}, {}, {}, set()
+    INDEX_STATS = {"running": False, "start": 0, "scanned": 0, "saved": 0, "dup": 0, "err": 0}
+    _cleanup_running = _reminder_running = False
 
 # ======================================================
-# 🧠 GLOBAL RUNTIME STATE (Koyeb Optimized)
+# DATETIME HELPERS
 # ======================================================
-
-class temp(object):
-    START_TIME = 0
-    BOT = None
-    ME = None
-    U_NAME = None
-    B_NAME = None
-
-    SETTINGS = {}
-    FILES = {}          # msg_id -> delivery data
-    PREMIUM = {}        # RAM premium cache
-    KEYWORDS = {}       # learned keywords (RAM)
-    BANNED_USERS = set()  # banned users set
-
-    INDEX_STATS = {
-        "running": False,
-        "start": 0,
-        "scanned": 0,
-        "saved": 0,
-        "dup": 0,
-        "err": 0
-    }
-    
-    # Koyeb optimization flags
-    _cleanup_running = False
-    _reminder_running = False
-
-
-# ======================================================
-# 👑 PREMIUM CONFIG (Synced with premium.py)
-# ======================================================
-
-GRACE_PERIOD = timedelta(minutes=30)
-PREMIUM_CACHE_TTL = 600  # 10 min cache
-
-
-# ======================================================
-# ⚡ ULTRA FAST PREMIUM CHECK (Required by premium.py)
-# ======================================================
-
-async def is_premium(user_id, bot=None) -> bool:
-    """
-    Koyeb optimized premium check with extended cache
-    Returns True if user is premium, False otherwise
-    Synced with premium.py grace period logic
-    ✅ REQUIRED BY PREMIUM.PY
-    """
-    # Admins always have premium
-    if user_id in ADMINS:
-        return True
-    
-    # If premium system is disabled, everyone has access
-    if not IS_PREMIUM:
-        return True
-
-    now_ts = time.time()
-    cached = temp.PREMIUM.get(user_id)
-
-    # Check cache first (10 min TTL)
-    if cached and now_ts - cached["checked_at"] < PREMIUM_CACHE_TTL:
-        expire = cached["expire"]
-        if expire:
-            return datetime.utcnow() <= expire + GRACE_PERIOD
-        return False
-
-    # Fetch from database
-    try:
-        plan = await db.get_plan(user_id)
-    except Exception as e:
-        print(f"[ERROR] is_premium DB error for user {user_id}: {e}")
-        # On error, return cached value if exists
-        if cached:
-            expire = cached["expire"]
-            return bool(expire and datetime.utcnow() <= expire + GRACE_PERIOD)
-        return False
-
-    # No plan or not premium
-    if not plan or not plan.get("premium"):
-        temp.PREMIUM[user_id] = {"expire": None, "checked_at": now_ts}
-        return False
-
-    # Get expiry date
-    expire = plan.get("expire")
-    if isinstance(expire, (int, float)):
-        expire = datetime.utcfromtimestamp(expire)
-    elif not isinstance(expire, datetime):
-        temp.PREMIUM[user_id] = {"expire": None, "checked_at": now_ts}
-        return False
-
-    # Check if expired (with grace period)
-    now_utc = datetime.utcnow()
-    if now_utc > expire + GRACE_PERIOD:
-        # Don't auto-remove here - let background task handle it
-        temp.PREMIUM[user_id] = {"expire": None, "checked_at": now_ts}
-        return False
-
-    # Cache and return
-    temp.PREMIUM[user_id] = {"expire": expire, "checked_at": now_ts}
-    return True
-
-
-# ======================================================
-# 📅 DATETIME HELPERS (Required by premium.py)
-# ======================================================
-
-def get_expiry_datetime(expire):
-    """
-    Convert expire timestamp/datetime to datetime object
-    ✅ REQUIRED BY PREMIUM.PY
-    """
-    if isinstance(expire, (int, float)):
-        return datetime.utcfromtimestamp(expire)
-    return expire
-
+def get_expiry_datetime(exp):
+    if isinstance(exp, (int, float)): return datetime.fromtimestamp(exp, timezone.utc)
+    return exp.replace(tzinfo=timezone.utc) if isinstance(exp, datetime) and exp.tzinfo is None else exp
 
 def fmt(dt):
-    """
-    Format datetime to readable string
-    ✅ REQUIRED BY PREMIUM.PY
-    """
-    if isinstance(dt, (int, float)):
-        dt = datetime.utcfromtimestamp(dt)
-    return dt.strftime("%d %b %Y, %I:%M %p")
-
+    return get_expiry_datetime(dt).strftime("%d %b %Y, %I:%M %p") if dt else "N/A"
 
 # ======================================================
-# 🔔 PREMIUM EXPIRY REMINDER (Koyeb Optimized)
+# ULTRA FAST PREMIUM CHECK
 # ======================================================
-
-REMINDER_STEPS = [
-    ("1 day", timedelta(days=1)),
-    ("6 hours", timedelta(hours=6)),
-    ("1 hour", timedelta(hours=1))
-]
-
-async def premium_expiry_reminder(bot):
-    """
-    Koyeb optimized reminder with batch processing
-    Sends reminders at: 1 day, 6 hours, 1 hour before expiry
-    ✅ REQUIRED FOR PREMIUM SYSTEM
-    """
-    if temp._reminder_running:
-        print("[INFO] Reminder task already running, skipping...")
-        return
+async def is_premium(user_id, bot=None) -> bool:
+    if user_id in ADMINS or not IS_PREMIUM: return True
+    now, cached = time.time(), temp.PREMIUM.get(user_id)
+    is_valid = lambda c: bool(c and c.get("expire") and datetime.now(timezone.utc) <= c["expire"] + timedelta(minutes=30))
     
+    if cached and now - cached["checked_at"] < 600: return is_valid(cached)
+    
+    try: plan = await db.get_plan(user_id)
+    except: return is_valid(cached)
+    
+    exp = get_expiry_datetime(plan.get("expire")) if plan and plan.get("premium") else None
+    valid = bool(exp and datetime.now(timezone.utc) <= exp + timedelta(minutes=30))
+    temp.PREMIUM[user_id] = {"expire": exp if valid else None, "checked_at": now}
+    return valid
+
+# ======================================================
+# PREMIUM EXPIRY REMINDER
+# ======================================================
+async def premium_expiry_reminder(bot):
+    if temp._reminder_running: return
     temp._reminder_running = True
-    print("[INFO] ✅ Premium expiry reminder task started")
+    steps = [("1 day", timedelta(days=1)), ("6 hours", timedelta(hours=6)), ("1 hour", timedelta(hours=1))]
     
     while True:
         try:
-            now = datetime.utcnow()
-            users = await db.get_premium_users()
-            
-            if not users:
-                await asyncio.sleep(1800)  # 30 min
-                continue
-            
-            reminder_count = 0
-            
-            for user in users:
-                try:
-                    uid = user.get("_id") or user.get("id")
-                    
-                    if not uid or uid in ADMINS:
-                        continue
-
-                    plan = user.get("plan", {})
-                    expire = plan.get("expire")
-                    last = plan.get("last_reminder")
-
-                    if not expire:
-                        continue
-
-                    # Convert to datetime
-                    if isinstance(expire, (int, float)):
-                        expire = datetime.utcfromtimestamp(expire)
-                    elif not isinstance(expire, datetime):
-                        continue
-
-                    # Check each reminder step
-                    for tag, delta in REMINDER_STEPS:
-                        # Skip if already sent this reminder
-                        if last == tag:
-                            continue
-                        
-                        # Check if it's time for this reminder
-                        if expire - delta <= now < expire:
-                            try:
-                                await bot.send_message(
-                                    uid,
-                                    "⏰ **Premium Expiry Alert**\n\n"
-                                    f"Your premium will expire in **{tag}**.\n\n"
-                                    "Use /plan to renew and continue enjoying premium benefits!"
-                                )
-                                
-                                # Update last reminder
-                                plan["last_reminder"] = tag
-                                await db.update_plan(uid, plan)
-                                
-                                reminder_count += 1
-                                print(f"[INFO] Sent {tag} reminder to user {uid}")
-                                
-                            except FloodWait as e:
-                                print(f"[WARN] FloodWait {e.value}s for user {uid}")
-                                await asyncio.sleep(e.value)
-                            except Exception as e:
-                                print(f"[ERROR] Failed to send reminder to {uid}: {e}")
-                            
-                            break  # Only send one reminder per user per iteration
-                    
-                    await asyncio.sleep(0.2)  # Rate limiting
-                    
-                except Exception as e:
-                    print(f"[ERROR] Error processing reminder for user: {e}")
-                    continue
-            
-            if reminder_count > 0:
-                print(f"[INFO] Sent {reminder_count} premium expiry reminders")
-                    
-        except Exception as e:
-            print(f"[ERROR] Premium reminder task error: {e}")
-        
-        await asyncio.sleep(1800)  # Run every 30 minutes
-
+            now = datetime.now(timezone.utc)
+            for u in (await db.get_premium_users() or []):
+                uid, plan = u.get("_id") or u.get("id"), u.get("plan", {})
+                if not uid or uid in ADMINS: continue
+                
+                exp = get_expiry_datetime(plan.get("expire"))
+                if not exp: continue
+                
+                for tag, delta in steps:
+                    if plan.get("last_reminder") == tag: continue
+                    if exp - delta <= now < exp:
+                        try:
+                            await bot.send_message(uid, f"⏰ **Premium Expiry Alert**\n\nYour premium will expire in **{tag}**.\n\nUse /plan to renew!")
+                            plan["last_reminder"] = tag; await db.update_plan(uid, plan)
+                        except FloodWait as e: await asyncio.sleep(e.value)
+                        except (UserIsBlocked, PeerIdInvalid, Exception): pass
+                        break
+                await asyncio.sleep(0.2)
+        except: pass
+        await asyncio.sleep(1800)
 
 # ======================================================
-# 🧠 SEARCH LEARNING + SUGGESTIONS (Koyeb Optimized)
+# SEARCH LEARNING + SUGGESTIONS
 # ======================================================
-
 def learn_keywords(text: str):
-    """Lightweight keyword learning with memory limit"""
-    try:
-        # Prevent memory bloat
-        if len(temp.KEYWORDS) > 10000:
-            sorted_kw = sorted(temp.KEYWORDS.items(), key=lambda x: x[1], reverse=True)
-            temp.KEYWORDS = dict(sorted_kw[:5000])
-        
-        # Learn keywords from search text
-        for w in text.lower().split():
-            if 3 <= len(w) <= 50:
-                temp.KEYWORDS[w] = temp.KEYWORDS.get(w, 0) + 1
-    except Exception as e:
-        print(f"[ERROR] Keyword learn error: {e}")
-
+    for w in text.lower().split():
+        if 3 <= len(w) <= 50: temp.KEYWORDS[w] = temp.KEYWORDS.get(w, 0) + 1
 
 def fast_similarity(a: str, b: str) -> int:
-    """Fast similarity check (0-100)"""
-    try:
-        if a == b:
-            return 100
-        a_set, b_set = set(a.split()), set(b.split())
-        common = a_set & b_set
-        if not common:
-            return 0
-        return min(int((len(common) / max(len(a_set), len(b_set))) * 100), 100)
-    except:
-        return 0
-
+    if a == b: return 100
+    sa, sb = set(a.split()), set(b.split())
+    return int((len(sa & sb) / max(len(sa), len(sb))) * 100) if sa & sb else 0
 
 def suggest_query(query: str):
-    """Suggest similar query based on learned keywords"""
     try:
-        best, score = None, 0
-        query_lower = query.lower()
-        
-        # Check top 500 keywords only
-        for i, k in enumerate(temp.KEYWORDS):
-            if i > 500:
-                break
-            s = fast_similarity(query_lower, k)
-            if s > score:
-                best, score = k, s
-            
-        return best if score >= 60 else None
-    except Exception as e:
-        print(f"[ERROR] Suggest query error: {e}")
-        return None
-
+        ql, best, max_s = query.lower(), None, 0
+        for k, _ in sorted(temp.KEYWORDS.items(), key=lambda x: x[1], reverse=True)[:500]:
+            if (s := fast_similarity(ql, k)) > max_s: best, max_s = k, s
+        return best if max_s >= 60 else None
+    except: return None
 
 # ======================================================
-# 🔁 FILE MEMORY CLEANER (Koyeb Optimized)
+# FILE MEMORY CLEANER
 # ======================================================
-
 async def cleanup_files_memory():
-    """
-    Koyeb optimized memory cleanup
-    Removes expired files and old premium cache
-    """
-    if temp._cleanup_running:
-        print("[INFO] Cleanup task already running, skipping...")
-        return
-    
+    if temp._cleanup_running: return
     temp._cleanup_running = True
-    print("[INFO] ✅ File memory cleanup task started")
     
     while True:
         try:
             now = int(time.time())
-            
-            # Cleanup expired files
-            expired = [k for k, v in temp.FILES.items() if v.get("expire", 0) <= now]
-            if expired:
-                for k in expired:
-                    temp.FILES.pop(k, None)
-                print(f"[INFO] Cleaned {len(expired)} expired files from memory")
-            
-            # Cleanup old premium cache (keep only 1000 most recent)
-            if len(temp.PREMIUM) > 1000:
-                old_keys = list(temp.PREMIUM.keys())[:500]
-                for k in old_keys:
-                    temp.PREMIUM.pop(k, None)
-                print(f"[INFO] Cleaned {len(old_keys)} old premium cache entries")
-            
-            # Cleanup keywords if too many
-            if len(temp.KEYWORDS) > 10000:
-                sorted_kw = sorted(temp.KEYWORDS.items(), key=lambda x: x[1], reverse=True)
-                temp.KEYWORDS = dict(sorted_kw[:5000])
-                print(f"[INFO] Cleaned keywords, kept top 5000")
-                    
-        except Exception as e:
-            print(f"[ERROR] Cleanup task error: {e}")
-        
-        await asyncio.sleep(120)  # Run every 2 minutes
-
+            [temp.FILES.pop(k, None) for k in [k for k, v in temp.FILES.items() if v.get("expire", 0) <= now]]
+            if len(temp.PREMIUM) > 1000: [temp.PREMIUM.pop(k, None) for k in list(temp.PREMIUM.keys())[:500]]
+            if len(temp.KEYWORDS) > 10000: temp.KEYWORDS = dict(sorted(temp.KEYWORDS.items(), key=lambda x: x[1], reverse=True)[:5000])
+        except: pass
+        await asyncio.sleep(120)
 
 # ======================================================
-# 📢 BROADCAST HELPERS (Koyeb Optimized)
+# BROADCAST HELPERS
 # ======================================================
-
-async def broadcast_messages(user_id, message, pin=False):
-    """Broadcast message to user with flood protection"""
+async def _bcast(uid, msg, pin, is_grp):
     try:
-        msg = await message.copy(chat_id=user_id)
-        if pin:
-            try:
-                await msg.pin(both_sides=True)
-            except:
-                pass
+        m = await msg.copy(chat_id=uid)
+        if pin: 
+            try: await m.pin(both_sides=not is_grp) if not is_grp else await m.pin()
+            except: pass
         return "Success"
     except FloodWait as e:
-        if e.value > 300:
-            return "Error"
-        await asyncio.sleep(e.value)
-        return await broadcast_messages(user_id, message, pin)
-    except Exception as e:
-        print(f"[ERROR] Broadcast error for user {user_id}: {e}")
-        try:
-            await db.delete_user(int(user_id))
-        except:
-            pass
+        if e.value > 300: return "Error"
+        await asyncio.sleep(e.value); return await _bcast(uid, msg, pin, is_grp)
+    except:
+        try: await db.delete_chat(uid) if is_grp else await db.delete_user(int(uid))
+        except: pass
         return "Error"
 
-
-async def groups_broadcast_messages(chat_id, message, pin=False):
-    """Broadcast message to group with flood protection"""
-    try:
-        msg = await message.copy(chat_id=chat_id)
-        if pin:
-            try:
-                await msg.pin()
-            except:
-                pass
-        return "Success"
-    except FloodWait as e:
-        if e.value > 300:
-            return "Error"
-        await asyncio.sleep(e.value)
-        return await groups_broadcast_messages(chat_id, message, pin)
-    except Exception as e:
-        print(f"[ERROR] Group broadcast error for {chat_id}: {e}")
-        try:
-            await db.delete_chat(chat_id)
-        except:
-            pass
-        return "Error"
-
+async def broadcast_messages(uid, msg, pin=False): return await _bcast(uid, msg, pin, False)
+async def groups_broadcast_messages(cid, msg, pin=False): return await _bcast(cid, msg, pin, True)
 
 # ======================================================
-# 🧰 UTILITIES
+# UTILITIES
 # ======================================================
-
 def get_size(size):
-    """Convert bytes to human readable format"""
     try:
         size = float(size)
-        for unit in ["B", "KB", "MB", "GB", "TB"]:
-            if size < 1024:
-                return f"{size:.2f} {unit}"
+        for u in ["B", "KB", "MB", "GB", "TB"]:
+            if size < 1024: return f"{size:.2f} {u}"
             size /= 1024
         return f"{size:.2f} PB"
-    except:
-        return "0 B"
+    except: return "0 B"
 
-
-def get_readable_time(seconds):
-    """Convert seconds to readable time"""
+def get_readable_time(sec):
     try:
-        periods = [("d", 86400), ("h", 3600), ("m", 60), ("s", 1)]
         out = ""
-        for name, sec in periods:
-            if seconds >= sec:
-                val, seconds = divmod(seconds, sec)
-                out += f"{int(val)}{name} "
+        for n, s in [("d", 86400), ("h", 3600), ("m", 60), ("s", 1)]:
+            if sec >= s: v, sec = divmod(sec, s); out += f"{int(v)}{n} "
         return out.strip() or "0s"
-    except:
-        return "0s"
+    except: return "0s"
 
-
-async def get_settings(group_id):
-    """Get group settings with caching"""
+async def get_settings(gid):
     try:
-        if group_id not in temp.SETTINGS:
-            temp.SETTINGS[group_id] = await db.get_settings(group_id)
-        return temp.SETTINGS[group_id]
-    except Exception as e:
-        print(f"[ERROR] Get settings error for group {group_id}: {e}")
-        return {}
+        if gid not in temp.SETTINGS: temp.SETTINGS[gid] = await db.get_settings(gid) or {}
+        return temp.SETTINGS[gid]
+    except: return {}
