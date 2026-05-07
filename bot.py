@@ -1,135 +1,77 @@
-import logging
+import os, time, asyncio, logging, pytz
+import uvloop
+from datetime import datetime, timezone
+from aiohttp import web
+
+from hydrogram import Client, filters
+from info import API_ID, API_HASH, BOT_TOKEN, PORT, LOG_CHANNEL, ADMINS
+from web import web_app
+from utils import temp, cleanup_files_memory, premium_expiry_reminder
+from database.users_chats_db import db
 
 # ==========================
-# 🔥 LOGGING CONFIG (KOYEB FRIENDLY)
+# 🔥 LOGGING CONFIG
 # ==========================
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
     handlers=[logging.StreamHandler()]
 )
-
-# Silence unnecessary logs
 logging.getLogger("hydrogram").setLevel(logging.ERROR)
-logging.getLogger("aiohttp.access").setLevel(logging.WARNING)  # Hide uptime bot logs
+logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
 logging.getLogger("aiohttp.server").setLevel(logging.WARNING)
 
 logger = logging.getLogger("XFILER")
 
-
-import os
-import time
-import asyncio
-import uvloop
-from datetime import datetime
-import pytz
-
-from hydrogram import Client, filters
-from aiohttp import web
-
-from web import web_app
-from info import API_ID, API_HASH, BOT_TOKEN, PORT, LOG_CHANNEL, ADMINS
-
-from utils import (
-    temp,
-    cleanup_files_memory,
-    premium_expiry_reminder
-)
-
-from database.users_chats_db import db
-# ❌ REMOVED: from plugins.banned import auto_unban_worker
-
-
 # ==========================
 # 🕒 TIME UTILS
 # ==========================
-IST = pytz.timezone("Asia/Kolkata")
-
 def ist_time():
-    return datetime.now(IST).strftime("%d %b %Y, %I:%M %p")
-
+    return datetime.now(pytz.timezone("Asia/Kolkata")).strftime("%d %b %Y, %I:%M %p")
 
 # ==========================
-# ⭐ PREMIUM AUTO-REMOVE BACKGROUND TASK
+# ⭐ PREMIUM AUTO-REMOVE TASK
 # ==========================
 async def check_and_remove_expired_premium(client):
-    """
-    Background task to automatically remove expired premium users
-    Runs every hour
-    """
     logger.info("✅ Premium expiry checker started")
-    
     while True:
         try:
-            users = await db.get_premium_users()
-            now = datetime.utcnow()
-            removed_count = 0
+            now = datetime.now(timezone.utc)
+            users = await db.get_premium_users() or []
+            removed = 0
             
-            for user in users:
-                try:
-                    plan = user.get("plan", {})
-                    expire = plan.get("expire")
-                    
-                    if not expire:
-                        continue
-                    
-                    # Convert to datetime
-                    if isinstance(expire, (int, float)):
-                        exp_dt = datetime.utcfromtimestamp(expire)
-                    else:
-                        exp_dt = expire
-                    
-                    # Check if expired
-                    if exp_dt <= now:
-                        uid = user.get("_id") or user.get("id")
-                        
-                        # Remove premium status
-                        await db.update_plan(uid, {
-                            "premium": False,
-                            "plan": None,
-                            "expire": None
-                        })
-                        
-                        removed_count += 1
-                        logger.info(f"✅ Removed expired premium for user {uid}")
-                        
-                        # Optional: Notify user
-                        try:
-                            await client.send_message(
-                                uid,
-                                "⚠️ **Premium Expired**\n\n"
-                                "Your premium subscription has ended.\n"
-                                "Use /plan to renew and continue enjoying premium benefits!"
-                            )
-                        except Exception as e:
-                            logger.debug(f"Could not notify user {uid}: {e}")
+            for u in users:
+                uid, plan = u.get("_id") or u.get("id"), u.get("plan", {})
+                exp = plan.get("expire")
+                if not exp: continue
                 
-                except Exception as e:
-                    logger.error(f"Error processing user premium expiry: {e}")
-                    continue
+                # Convert to UTC aware datetime
+                if isinstance(exp, (int, float)):
+                    exp = datetime.fromtimestamp(exp, timezone.utc)
+                elif isinstance(exp, datetime) and exp.tzinfo is None:
+                    exp = exp.replace(tzinfo=timezone.utc)
+                
+                if exp <= now:
+                    await db.update_plan(uid, {"premium": False, "plan": None, "expire": None})
+                    removed += 1
+                    logger.info(f"✅ Removed expired premium for user {uid}")
+                    try:
+                        await client.send_message(uid, "⚠️ **Premium Expired**\n\nYour premium subscription has ended.\nUse /plan to renew!")
+                    except: pass
             
-            if removed_count > 0:
-                logger.info(f"✅ Removed {removed_count} expired premium users")
-            
-            # Check every hour (3600 seconds)
-            await asyncio.sleep(3600)
+            if removed: logger.info(f"✅ Removed {removed} expired premium users")
+            await asyncio.sleep(3600) # Check every hour
             
         except Exception as e:
-            logger.error(f"❌ Error in check_and_remove_expired_premium: {e}")
-            await asyncio.sleep(600)  # Wait 10 minutes on error
-
+            logger.error(f"❌ Premium checker error: {e}")
+            await asyncio.sleep(600)
 
 # ==========================
-# 🧪 GLOBAL DEBUG: /START LOGGER
+# 🧪 GLOBAL DEBUG: /START LOGGER (Fixed Block Bug)
 # ==========================
-@Client.on_message(filters.private & filters.command("start"))
+@Client.on_message(filters.private & filters.command("start"), group=-1)
 async def debug_start_logger(client, message):
-    logger.warning(
-        f"/START HIT | user={message.from_user.id} | text='{message.text}'"
-    )
-    # ⚠️ DO NOT reply, DO NOT delete here
-    # This is ONLY for logs
-
+    logger.warning(f"/START HIT | user={message.from_user.id} | text='{message.text}'")
 
 # ==========================
 # 🤖 BOT CLASS
@@ -146,84 +88,50 @@ class Bot(Client):
 
     async def start(self):
         await super().start()
+        
+        # 🚀 SETUP ASYNC DATABASE INDEXES (Crucial for Speed)
+        await db.setup_indexes()
 
-        # ---- runtime globals ----
-        temp.START_TIME = time.time()
-        temp.BOT = self
+        # ---- Runtime Globals ----
+        temp.START_TIME, temp.BOT = time.time(), self
+        me = await self.get_me()
+        temp.ME, temp.U_NAME, temp.B_NAME = me.id, me.username, me.first_name
 
-        # ---- restart notify ----
+        # ---- Restart Notify ----
         if os.path.exists("restart.txt"):
             try:
                 with open("restart.txt") as f:
                     cid, mid = map(int, f.read().split())
-                    await self.edit_message_text(
-                        cid, mid, "✅ Bot Restarted Successfully!"
-                    )
-            except:
-                pass
+                    await self.edit_message_text(cid, mid, "✅ Bot Restarted Successfully!")
+            except: pass
             os.remove("restart.txt")
 
-        me = await self.get_me()
-        temp.ME = me.id
-        temp.U_NAME = me.username
-        temp.B_NAME = me.first_name
-
-        # ---- web server ----
+        # ---- Web Server ----
         runner = web.AppRunner(web_app)
         await runner.setup()
-        await web.TCPSite(
-            runner,
-            host="0.0.0.0",
-            port=PORT
-        ).start()
+        await web.TCPSite(runner, host="0.0.0.0", port=PORT).start()
 
         # ==========================
         # 🔁 BACKGROUND TASKS
         # ==========================
-
-        # 🔥 FILE MEMORY LEAK GUARD
         asyncio.create_task(cleanup_files_memory())
-
-        # 🔔 PREMIUM EXPIRY REMINDER
         asyncio.create_task(premium_expiry_reminder(self))
-
-        # ❌ REMOVED: Auto unban worker (now in group_mgmt.py)
-        # asyncio.create_task(auto_unban_worker(self))
-
-        # ⭐ PREMIUM AUTO-REMOVE (NEW)
         asyncio.create_task(check_and_remove_expired_premium(self))
-        logger.info("✅ Premium auto-remove task started")
 
-        # ---- admin notify ----
+        # ---- Notifications ----
+        start_msg = f"♻️ **Bot Restarted**\n🕒 Time: {ist_time()}\n🤖 Status: Online & Stable\n⭐ Premium System: Active"
         for admin in ADMINS:
-            try:
-                await self.send_message(
-                    admin,
-                    "♻️ **Bot Restarted Successfully**\n\n"
-                    f"🕒 Time: {ist_time()}\n"
-                    "🤖 Status: Online & Stable\n"
-                    "⭐ Premium System: Active"
-                )
-            except:
-                pass
+            try: await self.send_message(admin, start_msg)
+            except: pass
 
-        # ---- log channel ----
-        try:
-            await self.send_message(
-                LOG_CHANNEL,
-                f"🤖 <b>@{me.username} started successfully</b>\n"
-                f"🕒 {ist_time()}\n"
-                "⭐ Premium auto-remove: Active"
-            )
-        except:
-            pass
+        try: await self.send_message(LOG_CHANNEL, f"🤖 <b>@{temp.U_NAME} started</b>\n🕒 {ist_time()}")
+        except: pass
 
-        logger.info(f"Bot @{me.username} started successfully")
+        logger.info(f"✅ Bot @{temp.U_NAME} started successfully")
 
     async def stop(self, *args):
         await super().stop()
-        logger.info("Bot stopped cleanly")
-
+        logger.info("✅ Bot stopped cleanly")
 
 # ==========================
 # 🚀 ENTRYPOINT
@@ -236,7 +144,6 @@ async def main():
         await asyncio.Event().wait()
     except (KeyboardInterrupt, SystemExit):
         await bot.stop()
-
 
 if __name__ == "__main__":
     asyncio.run(main())
