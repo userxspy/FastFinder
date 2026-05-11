@@ -1,57 +1,86 @@
-import re
-import math
+import math, secrets, mimetypes, logging
+from urllib.parse import quote
 from aiohttp import web
+from info import BIN_CHANNEL
 from utils import temp
+from web.utils.custom_dl import TGCustomYield, chunk_size, offset_fix
+from web.utils.render_template import media_watch
 
-stream_routes = web.RouteTableDef()
+routes = web.RouteTableDef()
+logger = logging.getLogger(__name__)
 
-@stream_routes.get('/stream/{file_id}')
-async def stream_handler(request: web.Request):
+# ─────────────────────────────────────────────
+# 🏠 ROOT ROUTE (FAST FINDER UI — SAFE TAGS & FIXED BUG)
+# ─────────────────────────────────────────────
+@routes.get("/", allow_head=True)
+async def root_route_handler(request):
+    bot_username = getattr(temp, 'U_NAME', 'AutoFilterBot')
+    
+    # ✅ FIX: Removed 'f' prefix and used .replace() to avoid SyntaxError with CSS/JS brackets
+    html_content = """<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Fast Finder — Movies, Series & More</title><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700;900&display=swap" rel="stylesheet"><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',sans-serif;background:#000;color:#fff;min-height:100vh;display:flex;flex-direction:column}.hero-bg{position:fixed;inset:0;background:linear-gradient(to top,#000 0,rgba(0,0,0,.4) 50%,rgba(0,0,0,.8) 100%),url('https://assets.nflxext.com/ffe/siteui/vlv3/f841d4c7-10e1-40af-bcae-07a3f8dc141a/f6d7434e-d6de-4185-a6d4-c77a2d08737b/IN-en-20220502-popsignuptwoweeks-perspective_alpha_website_medium.jpg') center/cover;z-index:-1}.navbar{display:flex;justify-content:space-between;align-items:center;padding:25px 5%;z-index:10}.logo{font-size:28px;font-weight:900;color:#E50914;text-decoration:none;display:flex;align-items:center;gap:8px;letter-spacing:1px;text-transform:uppercase}.nf-icon{background:#E50914;color:#fff;padding:2px 8px;border-radius:3px;font-size:24px;line-height:1}.admin-btn{background:#E50914;color:#fff;text-decoration:none;padding:8px 16px;border-radius:4px;font-weight:700;font-size:14px;transition:.2s}.admin-btn:hover{background:#b30710}.hero-content{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:20px;z-index:10;max-width:800px;margin:0 auto}.hero-title{font-size:4rem;font-weight:900;margin-bottom:15px;line-height:1.1}.hero-sub{font-size:1.5rem;font-weight:500;margin-bottom:30px}.search-container{display:flex;width:100%;max-width:650px;flex-direction:row}.search-input{flex:1;padding:20px 25px;font-size:1.2rem;border:1px solid #808080;border-radius:4px 0 0 4px;background:rgba(0,0,0,.7);color:#fff;outline:none;transition:.2s}.search-input:focus{border-color:#fff}.search-btn{background:#E50914;color:#fff;border:none;padding:0 35px;font-size:1.5rem;font-weight:700;border-radius:0 4px 4px 0;cursor:pointer;display:flex;align-items:center;gap:10px;transition:.2s}.search-btn:hover{background:#b30710}.quick-picks{margin-top:40px;display:flex;flex-wrap:wrap;justify-content:center;gap:10px}.qp-title{width:100%;font-size:1rem;color:#b3b3b3;margin-bottom:10px;font-weight:500;text-transform:uppercase;letter-spacing:1px}.tag{background:rgba(51,51,51,.8);border:1px solid #fff;padding:8px 18px;border-radius:50px;font-size:14px;font-weight:700;cursor:pointer;transition:.2s}.tag:hover{background:#fff;color:#000}@media (max-width:600px){.hero-title{font-size:2.5rem}.hero-sub{font-size:1.2rem}.search-container{flex-direction:column;gap:10px}.search-input{border-radius:4px;border:1px solid #808080;padding:15px}.search-btn{border-radius:4px;padding:15px;justify-content:center;font-size:1.2rem}.logo{font-size:20px}.nf-icon{font-size:18px}}</style></head><body><div class="hero-bg"></div><header class="navbar"><a href="/" class="logo"><span class="nf-icon">F</span> FAST FINDER</a><a href="/admin" class="admin-btn">Admin Panel</a></header><main class="hero-content"><h1 class="hero-title">Unlimited movies, TV shows, and more.</h1><p class="hero-sub">Search and stream instantly via Telegram.</p><div class="search-container"><input type="text" id="searchInput" class="search-input" placeholder="Search genres, qualities, formats..." autocomplete="off"><button class="search-btn" onclick="startSearch()">Search ></button></div><div class="quick-picks"><div class="qp-title">Trending Searches</div><span class="tag" onclick="fillAndSearch('Action')">Action</span><span class="tag" onclick="fillAndSearch('Comedy')">Comedy</span><span class="tag" onclick="fillAndSearch('Thriller')">Thriller</span><span class="tag" onclick="fillAndSearch('Anime')">Anime</span><span class="tag" onclick="fillAndSearch('4K')">4K UHD</span><span class="tag" onclick="fillAndSearch('Sci-Fi')">Sci-Fi</span></div></main><script>function startSearch(){const q=document.getElementById('searchInput').value.trim();const base=`https://t.me/BOT_USERNAME_PLACEHOLDER`;window.open(q?`${base}?start=${encodeURIComponent(q)}`:base,'_blank');}function fillAndSearch(q){document.getElementById('searchInput').value=q;startSearch();}document.getElementById('searchInput').addEventListener('keydown',e=>{if(e.key==='Enter')startSearch();});</script></body></html>""".replace("BOT_USERNAME_PLACEHOLDER", bot_username)
+    
+    return web.Response(text=html_content, content_type='text/html')
+
+# ─────────────────────────────────────────────
+# 📺 STREAM / WATCH ROUTE
+# ─────────────────────────────────────────────
+@routes.get("/watch/{message_id}")
+async def watch_handler(request):
     try:
-        file_id = request.match_info['file_id']
-        bot = temp.BOT 
-        
-        # यहाँ आपको file_id को डिकोड करके Telegram message/file fetch करना होगा
-        # उदाहरण के लिए (आपको अपने फाइल सिस्टम के हिसाब से इसे एडजस्ट करना होगा):
-        # message = await bot.get_messages(LOG_CHANNEL, int(file_id))
-        # file_size = message.video.file_size
-        
-        # डमी साइज़ (रियल में Telegram से आएगा)
-        file_size = 1024 * 1024 * 500 # 500 MB 
-        
-        # Range Header Parsing for seeking forward/backward
-        range_header = request.headers.get('Range', 0)
-        start = 0
-        end = file_size - 1
-        
-        if range_header:
-            match = re.search(r'bytes=(\d+)-(\d*)', range_header)
-            if match:
-                start = int(match.group(1))
-                if match.group(2):
-                    end = int(match.group(2))
-
-        chunk_size = (end - start) + 1
-
-        headers = {
-            'Content-Type': 'video/mp4',
-            'Accept-Ranges': 'bytes',
-            'Content-Range': f'bytes {start}-{end}/{file_size}',
-            'Content-Length': str(chunk_size),
-        }
-
-        response = web.StreamResponse(
-            status=206 if range_header else 200,
-            headers=headers
-        )
-        await response.prepare(request)
-
-        # ⚠️ Telegram से असली स्ट्रीमिंग लॉजिक यहाँ आएगा:
-        # async for chunk in bot.stream_media(message, offset=start, limit=chunk_size):
-        #     await response.write(chunk)
-        
-        await response.write_eof()
-        return response
-
+        return web.Response(text=await media_watch(int(request.match_info['message_id'])), content_type='text/html')
+    except ValueError: return web.Response(status=400, text="Invalid Message ID")
     except Exception as e:
-        return web.Response(text=f"Streaming Error: {e}", status=500)
+        logger.error(f"Watch Error: {e}")
+        return web.Response(status=500, text="Internal Server Error")
+
+# ─────────────────────────────────────────────
+# 📥 DOWNLOAD & CORE LOGIC
+# ─────────────────────────────────────────────
+@routes.get("/download/{message_id}")
+async def download_handler(request):
+    try: return await media_download(request, int(request.match_info['message_id']))
+    except ValueError: return web.Response(status=400, text="Invalid Message ID")
+    except Exception as e:
+        logger.error(f"Download Error: {e}")
+        return web.Response(status=500, text="Internal Server Error")
+
+async def media_download(request, message_id: int):
+    try:
+        media_msg = await temp.BOT.get_messages(BIN_CHANNEL, message_id)
+        media = getattr(media_msg, media_msg.media.value, None) if media_msg and media_msg.media else None
+        if not media: return web.Response(status=404, text="Media Not Supported or Not Found")
+
+        file_size, file_name = media.file_size, getattr(media, 'file_name', None)
+        if not file_name: file_name = f"video_{secrets.token_hex(3)}.mp4" if getattr(media_msg, 'video', None) else f"file_{secrets.token_hex(3)}.bin"
+
+        mime_type = getattr(media, 'mime_type', None) or mimetypes.guess_type(file_name)[0] or "application/octet-stream"
+
+        try:
+            r_head = request.headers.get('Range')
+            fb, ub = (int(x) if x else file_size - 1 for x in r_head.replace('bytes=', '').split('-')) if r_head else (0, file_size - 1)
+        except: fb, ub = 0, file_size - 1
+
+        if ub > file_size or fb < 0 or ub < fb:
+            return web.Response(status=416, body="416: Range Not Satisfiable", headers={"Content-Range": f"bytes */{file_size}"})
+
+        req_len = ub - fb + 1
+        ncs = await chunk_size(req_len)
+        offset = await offset_fix(fb, ncs)
+        
+        body = TGCustomYield().yield_file(media_msg, offset, fb - offset, (ub % ncs) + 1, math.ceil(req_len / ncs), ncs)
+        enc_fn = quote(file_name)
+
+        return web.Response(
+            status=206 if request.headers.get('Range') else 200,
+            body=body,
+            headers={
+                "Content-Type": mime_type,
+                "Content-Range": f"bytes {fb}-{ub}/{file_size}",
+                "Content-Disposition": f'attachment; filename="{enc_fn}"; filename*=UTF-8\'\'{enc_fn}',
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(req_len)
+            }
+        )
+    except Exception as e:
+        logger.error(f"Stream Error: {e}")
+        return web.Response(status=500, text="Server Error")
