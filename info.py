@@ -46,6 +46,14 @@ if not BOT_TOKEN:
 BOT_ID = BOT_TOKEN.split(":")[0]
 PORT = int(environ.get('PORT', '80'))
 
+# info.py के अंदर कहीं भी ये लाइनें ऐड करें:
+import os
+
+# Web Admin Panel Credentials
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123") 
+
+
 # ================= IMAGES =================
 
 PICS = environ.get(
