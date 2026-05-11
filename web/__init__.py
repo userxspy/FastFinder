@@ -1,20 +1,22 @@
-# web/__init__.py
+# Credit - adarsh-goel
 
 from aiohttp import web
 from web.stream_routes import routes
 
+# ⬇️ यहाँ हमने अपनी नई फाइल्स को इम्पोर्ट किया है ⬇️
+from web.admin_routes import admin_routes
+from web.search_api import search_routes
 
-# ======================================================
-# 🌐 WEB APP
-# ======================================================
+# =========================================
+# 🚀 WEB APP INITIALIZATION
+# =========================================
 
-def create_app():
-    app = web.Application()
+# client_max_size=100MB set kiya hai taaki 'Payload Too Large' error na aaye
+web_app = web.Application(client_max_size=100 * 1024 * 1024)
 
-    # routes
-    app.add_routes(routes)
+# Routes load karna
+web_app.add_routes(routes)
 
-    return app
-
-
-web_app = create_app()
+# ⬇️ यहाँ हमने नए राउट्स को वेब ऐप से जोड़ दिया है ⬇️
+web_app.add_routes(admin_routes)
+web_app.add_routes(search_routes)
