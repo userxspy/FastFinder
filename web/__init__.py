@@ -1,22 +1,12 @@
-# Credit - adarsh-goel
-
 from aiohttp import web
-from web.stream_routes import routes
+from .search_api import search_routes
+from .stream_routes import stream_routes
+from .admin_routes import admin_routes # अगर आप एडमिन पैनल बना रहे हैं
 
-# ⬇️ यहाँ हमने अपनी नई फाइल्स को इम्पोर्ट किया है ⬇️
-from web.admin_routes import admin_routes
-from web.search_api import search_routes
+# Main web application
+web_app = web.Application()
 
-# =========================================
-# 🚀 WEB APP INITIALIZATION
-# =========================================
-
-# client_max_size=100MB set kiya hai taaki 'Payload Too Large' error na aaye
-web_app = web.Application(client_max_size=100 * 1024 * 1024)
-
-# Routes load karna
-web_app.add_routes(routes)
-
-# ⬇️ यहाँ हमने नए राउट्स को वेब ऐप से जोड़ दिया है ⬇️
-web_app.add_routes(admin_routes)
+# Registering all routes from different files
 web_app.add_routes(search_routes)
+web_app.add_routes(stream_routes)
+web_app.add_routes(admin_routes)
