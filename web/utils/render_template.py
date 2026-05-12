@@ -5,28 +5,42 @@ from utils import temp
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────
-# 🎬 FAST FINDER OPTIMIZED STREAM TEMPLATE
+# 🎬 FAST FINDER OPTIMIZED STREAM TEMPLATE (WITH THEME TOGGLE)
 # ─────────────────────────────────────────────
 watch_tmplt = """<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>{heading}</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;800;900&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,400;0,600;0,800;0,900;1,600&display=swap">
 <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css"/>
 <style>
-:root{{--red:#e50914;--bg:#000;}}
+:root{{
+--red:#e50914; --bg1:#000; --bg2:#111; --txt:#fff; 
+--nav1:rgba(0,0,0,.95); --nav2:rgba(0,0,0,.4); 
+--box:#000; --box-bd:rgba(255,255,255,.08); 
+--btn-c:rgba(255,255,255,.08); --btn-bd:rgba(255,255,255,.1); --txt-muted:#b3b3b3;
+}}
+[data-theme="light"]{{
+--bg1:#f8f9fa; --bg2:#e9ecef; --txt:#121212; 
+--nav1:rgba(255,255,255,.95); --nav2:rgba(255,255,255,.4); 
+--box:#fff; --box-bd:rgba(0,0,0,.15); 
+--btn-c:rgba(0,0,0,.06); --btn-bd:rgba(0,0,0,.15); --txt-muted:#555;
+}}
 *{{margin:0;padding:0;box-sizing:border-box;}}
-body{{background:linear-gradient(to bottom,#000,#111);font-family:'Montserrat',sans-serif;color:#fff;min-height:100vh;}}
-.navbar{{width:100%;padding:16px 4%;display:flex;align-items:center;position:fixed;top:0;z-index:999;background:linear-gradient(to bottom,rgba(0,0,0,.95),rgba(0,0,0,.4),transparent);backdrop-filter:blur(6px);}}
+body{{background:linear-gradient(to bottom,var(--bg1),var(--bg2));font-family:'Montserrat',sans-serif;color:var(--txt);min-height:100vh;transition:background .3s,color .3s;}}
+.navbar{{width:100%;padding:16px 4%;display:flex;align-items:center;justify-content:space-between;position:fixed;top:0;z-index:999;background:linear-gradient(to bottom,var(--nav1),var(--nav2),transparent);backdrop-filter:blur(6px);transition:background .3s;}}
 .ff-logo{{display:flex;align-items:center;gap:10px;cursor:pointer;transition:.3s;}} .ff-logo:hover{{transform:scale(1.03);}}
-.ff-icon{{background:var(--red);font-size:26px;font-weight:800;width:42px;height:42px;display:flex;align-items:center;justify-content:center;border-radius:8px;}}
+.ff-icon{{background:var(--red);color:#fff;font-size:26px;font-weight:800;width:42px;height:42px;display:flex;align-items:center;justify-content:center;border-radius:8px;}}
 .ff-text{{color:var(--red);font-size:28px;font-weight:900;letter-spacing:1px;text-shadow:0 0 15px rgba(229,9,20,.4);}}
+.theme-btn{{background:transparent;border:1px solid var(--box-bd);color:var(--txt);padding:7px 16px;border-radius:6px;font-family:'Montserrat',sans-serif;font-weight:600;font-style:italic;font-size:15px;cursor:pointer;transition:.3s;}}
+.theme-btn:hover{{background:var(--btn-c);}}
 .hero-container{{width:100%;max-width:1350px;margin:auto;padding:110px 20px 40px;}}
-.player-box{{width:100%;border-radius:18px;background:#000;border:1px solid rgba(255,255,255,.08);position:relative;box-shadow:0 0 20px rgba(255,0,0,.15),0 20px 60px rgba(0,0,0,.8);overflow:hidden;}}
+.player-box{{width:100%;border-radius:18px;background:var(--box);border:1px solid var(--box-bd);position:relative;box-shadow:0 0 20px rgba(255,0,0,.1),0 20px 60px rgba(0,0,0,.5);overflow:hidden;transition:background .3s,border-color .3s;}}
 video{{width:100%;height:auto;display:block;}}
 .skip-zone{{position:absolute;top:0;bottom:25%;width:40%;z-index:20;display:flex;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;}}
 .skip-zone.left{{left:0;}} .skip-zone.right{{right:0;}}
 .skip-ripple{{position:absolute;inset:0;background:rgba(255,255,255,.12);opacity:0;transition:opacity .3s;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none;}}
+[data-theme="light"] .skip-ripple{{background:rgba(0,0,0,.1);}}
 .skip-zone.left .skip-ripple{{border-radius:0 50% 50% 0/0 100% 100% 0;transform-origin:left center;}}
 .skip-zone.right .skip-ripple{{border-radius:50% 0 0 50%/100% 0 0 100%;transform-origin:right center;}}
 .skip-zone.active .skip-ripple{{opacity:1;animation:pop .3s cubic-bezier(.25,1,.5,1) forwards;}}
@@ -37,17 +51,20 @@ video{{width:100%;height:auto;display:block;}}
 .controls-row{{display:flex;flex-wrap:wrap;gap:14px;}}
 .btn{{display:inline-flex;align-items:center;gap:10px;padding:13px 26px;border-radius:10px;text-decoration:none;font-size:1rem;font-weight:600;cursor:pointer;transition:.25s;border:none;}} .btn svg{{width:20px;height:20px;}}
 .btn-download{{background:var(--red);color:#fff;box-shadow:0 0 18px rgba(229,9,20,.35);}} .btn-download:hover{{transform:translateY(-2px);background:#ff1a1a;}}
-.btn-copy{{background:rgba(255,255,255,.08);color:#fff;border:1px solid rgba(255,255,255,.1);backdrop-filter:blur(6px);}} .btn-copy:hover{{background:rgba(255,255,255,.15);}}
+.btn-copy{{background:var(--btn-c);color:var(--txt);border:1px solid var(--btn-bd);transition:background .3s,color .3s;}} .btn-copy:hover{{background:var(--box-bd);}}
 .plyr--video{{--plyr-color-main:#e50914;--plyr-video-background:#000;}}
 .plyr__control--overlaid,.plyr__control:hover{{background:rgba(229,9,20,.9)!important;}} .plyr__controls{{z-index:30!important;}}
 #toast{{visibility:hidden;min-width:220px;background:var(--red);color:#fff;text-align:center;border-radius:10px;padding:15px;position:fixed;right:30px;bottom:30px;z-index:9999;font-weight:600;box-shadow:0 10px 30px rgba(0,0,0,.45);}}
 #toast.show{{visibility:visible;animation:fi .4s,fo .4s 2.6s;}}
 @keyframes fi{{from{{opacity:0;bottom:0;}}to{{opacity:1;bottom:30px;}}}} @keyframes fo{{from{{opacity:1;bottom:30px;}}to{{opacity:0;bottom:0;}}}}
-@media(max-width:768px){{.hero-container{{padding-top:95px;}} .ff-icon{{width:36px;height:36px;font-size:22px;}} .ff-text{{font-size:22px;}} .title{{font-size:1.3rem;}} .controls-row{{flex-direction:column;}} .btn{{width:100%;justify-content:center;}}}}
+@media(max-width:768px){{.hero-container{{padding-top:95px;}} .ff-icon{{width:36px;height:36px;font-size:22px;}} .ff-text{{font-size:22px;}} .theme-btn{{font-size:13px;padding:6px 12px;}} .title{{font-size:1.3rem;}} .controls-row{{flex-direction:column;}} .btn{{width:100%;justify-content:center;}}}}
 </style>
 </head>
 <body>
-<div class="navbar"><div class="ff-logo"><div class="ff-icon">F</div><div class="ff-text">FAST FINDER</div></div></div>
+<div class="navbar">
+    <div class="ff-logo"><div class="ff-icon">F</div><div class="ff-text">FAST FINDER</div></div>
+    <button class="theme-btn" id="theme-btn">Theme</button>
+</div>
 <div class="hero-container">
 <div class="player-box"><video id="player" playsinline controls><source src="{src}" type="{mime_type}"></video></div>
 <div class="info-section"><div class="title">{file_name}</div>
@@ -59,6 +76,16 @@ video{{width:100%;height:auto;display:block;}}
 
 <script src="https://cdn.plyr.io/3.7.8/plyr.js"></script>
 <script>
+// THEME TOGGLE LOGIC
+const docEl=document.documentElement, themeBtn=document.getElementById('theme-btn');
+if(localStorage.getItem('ff-theme')==='light') docEl.setAttribute('data-theme','light');
+themeBtn.addEventListener('click',()=>{{
+    let newT = docEl.getAttribute('data-theme')==='light'?'dark':'light';
+    docEl.setAttribute('data-theme', newT);
+    localStorage.setItem('ff-theme', newT);
+}});
+
+// PLAYER & SKIP LOGIC
 const player=new Plyr('#player',{{controls:['play-large','play','progress','current-time','mute','settings','pip','fullscreen'],settings:['quality','speed'],autoplay:!1,doubleClick:{{togglesFullscreen:!1}}}});
 player.on('ready',()=>{{
     const c=document.querySelector('.plyr'), l=document.createElement('div'), r=document.createElement('div');
@@ -84,6 +111,8 @@ player.on('ready',()=>{{
     ['dblclick','click'].forEach(ev=>{{l.addEventListener(ev,e=>{{e.preventDefault();e.stopPropagation()}});r.addEventListener(ev,e=>{{e.preventDefault();e.stopPropagation()}})}});
     l.addEventListener('pointerup',e=>tap(e,'l',l)); r.addEventListener('pointerup',e=>tap(e,'r',r));
 }});
+
+// COPY LINK LOGIC
 function copyLink(){{navigator.clipboard.writeText("{src}"); let t=document.getElementById("toast"); t.classList.add("show"); setTimeout(()=>t.classList.remove("show"),3000);}}
 </script>
 </body></html>"""
