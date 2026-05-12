@@ -60,7 +60,7 @@ video{{width:100%;height:auto;display:block;}}
 <script src="https://cdn.plyr.io/3.7.8/plyr.js"></script>
 <script>
 const player=new Plyr('#player',{{controls:['play-large','play','progress','current-time','mute','settings','pip','fullscreen'],settings:['quality','speed'],autoplay:!1,doubleClick:{{togglesFullscreen:!1}}}});
-player.on('ready',()=>{
+player.on('ready',()=>{{
     const c=document.querySelector('.plyr'), l=document.createElement('div'), r=document.createElement('div');
     l.className='skip-zone left'; r.className='skip-zone right';
     const ui=d=>'<div class="skip-ripple"><div class="skip-arrows"><svg viewBox="0 0 24 24">'+d+'</svg></div><div class="skip-text">10s</div></div>';
@@ -69,22 +69,22 @@ player.on('ready',()=>{
     c.append(l,r);
     
     let tc=0, tmr, cur=null;
-    const tap=(e,side,z)=>{
+    const tap=(e,side,z)=>{{
         e.preventDefault(); e.stopPropagation();
-        if(cur!==side){tc=0; cur=side;}
+        if(cur!==side){{tc=0; cur=side;}}
         tc++; clearTimeout(tmr);
-        if(tc===1){
-            tmr=setTimeout(()=>{player.togglePlay(); tc=0; cur=null;},250);
-        }else{
+        if(tc===1){{
+            tmr=setTimeout(()=>{{player.togglePlay(); tc=0; cur=null;}},250);
+        }}else{{
             let t=tc*5; z.querySelector('.skip-text').innerText=t+'s';
             z.classList.remove('active'); void z.offsetWidth; z.classList.add('active');
-            tmr=setTimeout(()=>{player.currentTime+=side==='l'?-t:t; z.classList.remove('active'); tc=0; cur=null;},600);
-        }
-    };
-    ['dblclick','click'].forEach(ev=>{l.addEventListener(ev,e=>{e.preventDefault();e.stopPropagation()});r.addEventListener(ev,e=>{e.preventDefault();e.stopPropagation()})});
+            tmr=setTimeout(()=>{{player.currentTime+=side==='l'?-t:t; z.classList.remove('active'); tc=0; cur=null;}},600);
+        }}
+    }};
+    ['dblclick','click'].forEach(ev=>{{l.addEventListener(ev,e=>{{e.preventDefault();e.stopPropagation()}});r.addEventListener(ev,e=>{{e.preventDefault();e.stopPropagation()}})}});
     l.addEventListener('pointerup',e=>tap(e,'l',l)); r.addEventListener('pointerup',e=>tap(e,'r',r));
-});
-function copyLink(){navigator.clipboard.writeText("{src}"); let t=document.getElementById("toast"); t.classList.add("show"); setTimeout(()=>t.classList.remove("show"),3000);}
+}});
+function copyLink(){{navigator.clipboard.writeText("{src}"); let t=document.getElementById("toast"); t.classList.add("show"); setTimeout(()=>t.classList.remove("show"),3000);}}
 </script>
 </body></html>"""
 
