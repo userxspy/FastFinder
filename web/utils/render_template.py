@@ -98,7 +98,7 @@ video{{width:100%;display:block}}
 
 /* TAP ZONES */
 .tap-zone{{
-  position:absolute;top:0;bottom:0;width:35%;z-index:10;
+  position:absolute;top:0;bottom:60px;width:35%;z-index:10;
   cursor:pointer;-webkit-tap-highlight-color:transparent;user-select:none;
   display:flex;align-items:center;
 }}
@@ -132,6 +132,7 @@ video{{width:100%;display:block}}
 .plyr--video .plyr__controls{{
   background:linear-gradient(transparent,rgba(0,0,0,0.8)) !important;
   padding:18px 12px 10px !important;
+  z-index: 20 !important;
 }}
 .plyr__control--overlaid{{
   background:var(--accent) !important;color:#fff !important;
