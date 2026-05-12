@@ -26,7 +26,8 @@ def render_page(title, body):
 # ==========================================
 # 🏠 1. LOGIN PAGE
 # ==========================================
-@public_routes.get('/')
+# 🚀 FIX: URL changed to /login
+@public_routes.get('/login')
 async def login_page(req):
     if req.cookies.get('user_session') in temp.PUBLIC_SESSIONS:
         return web.HTTPFound('/dashboard')
@@ -44,14 +45,14 @@ async def login_user(req):
     
     if user and user.get('web_pass') == hash_pass(pwd):
         if not await is_premium(user['id'], temp.BOT):
-            return web.HTTPFound('/?err=Active Premium Subscription Required! Message the bot to upgrade.')
+            return web.HTTPFound('/login?err=Active Premium Subscription Required! Message the bot to upgrade.')
             
         sid = str(uuid.uuid4())
         temp.PUBLIC_SESSIONS[sid] = {"id": user['id'], "expire": time.time() + 86400 * 7}
         res = web.HTTPFound('/dashboard')
         res.set_cookie('user_session', sid, max_age=86400 * 7)
         return res
-    return web.HTTPFound('/?err=Invalid Email or Password')
+    return web.HTTPFound('/login?err=Invalid Email or Password')
 
 # ==========================================
 # 📝 2. SIGN UP (WITH OTP VERIFICATION)
@@ -60,7 +61,7 @@ async def login_user(req):
 async def signup_page(req):
     err = req.query.get('err', '')
     err_box = f"<div class='err'>{err}</div>" if err else ""
-    html = f"<div class='card'><h2>Sign Up</h2>{err_box}<p style='color:#808080; font-size:13px; margin-bottom:15px'>*Start the Telegram bot before signing up</p><form action='/register_user' method='post'><div class='input-group'><input type='number' name='tg_id' placeholder='Your Telegram ID (from @userinfobot)' required></div><div class='input-group'><input type='email' name='email' placeholder='Email address' required></div><div class='input-group'><input type='password' name='password' placeholder='Password' required></div><button class='btn'>Verify Telegram ID</button></form><a href='/' class='link'>Already have an account? Sign In.</a></div>"
+    html = f"<div class='card'><h2>Sign Up</h2>{err_box}<p style='color:#808080; font-size:13px; margin-bottom:15px'>*Start the Telegram bot before signing up</p><form action='/register_user' method='post'><div class='input-group'><input type='number' name='tg_id' placeholder='Your Telegram ID (from @userinfobot)' required></div><div class='input-group'><input type='email' name='email' placeholder='Email address' required></div><div class='input-group'><input type='password' name='password' placeholder='Password' required></div><button class='btn'>Verify Telegram ID</button></form><a href='/login' class='link'>Already have an account? Sign In.</a></div>"
     return render_page("Sign Up - Fast Finder", html)
 
 @public_routes.post('/register_user')
@@ -114,7 +115,7 @@ async def confirm_signup(req):
     try: await temp.BOT.send_message(saved['tg_id'], "✅ **Web Account Successfully Created!**\nYou can now log in to the website.")
     except: pass
     
-    return web.HTTPFound('/?msg=Account Created Successfully! Please Sign In.')
+    return web.HTTPFound('/login?msg=Account Created Successfully! Please Sign In.')
 
 # ==========================================
 # 🔐 3. FORGOT PASSWORD (OTP VIA BOT)
@@ -123,7 +124,7 @@ async def confirm_signup(req):
 async def forgot_page(req):
     err = req.query.get('err', '')
     b = f"<div class='err'>{err}</div>" if err else ""
-    html = f"<div class='card'><h2>Reset Password</h2>{b}<form action='/send_otp' method='post'><div class='input-group'><input type='email' name='email' placeholder='Enter your registered email' required></div><button class='btn'>Send OTP to Telegram</button></form><a href='/' class='link'>Back to Sign In</a></div>"
+    html = f"<div class='card'><h2>Reset Password</h2>{b}<form action='/send_otp' method='post'><div class='input-group'><input type='email' name='email' placeholder='Enter your registered email' required></div><button class='btn'>Send OTP to Telegram</button></form><a href='/login' class='link'>Back to Sign In</a></div>"
     return render_page("Forgot Password", html)
 
 @public_routes.post('/send_otp')
@@ -161,7 +162,7 @@ async def reset_password(req):
         
     await db.users.update_one({"id": saved_otp['id']}, {"$set": {"web_pass": hash_pass(new_pass)}})
     del temp.OTPS[email] 
-    return web.HTTPFound('/?msg=Password Reset Successful! Please Login.')
+    return web.HTTPFound('/login?msg=Password Reset Successful! Please Login.')
 
 # ==========================================
 # 🚪 4. LOGOUT ROUTE
@@ -170,6 +171,6 @@ async def reset_password(req):
 async def user_logout(req):
     s = req.cookies.get('user_session')
     if s in temp.PUBLIC_SESSIONS: del temp.PUBLIC_SESSIONS[s]
-    res = web.HTTPFound('/')
+    res = web.HTTPFound('/') # Redirects to main landing page (stream_routes.py)
     res.del_cookie('user_session')
     return res
