@@ -1,122 +1,64 @@
-import time
-import sys
-import platform
-
+import time, sys, platform
 from hydrogram import Client, filters, enums
-from hydrogram.errors import UserNotParticipant
 from utils import temp
 from info import IS_PREMIUM
-
 
 # ======================================================
 # 🆔 ID COMMAND (PM + GROUP | USER + STICKER | ADMIN BADGE)
 # ======================================================
-
 @Client.on_message(filters.command("id"))
-async def get_id(client, message):
-
-    reply = message.reply_to_message
-
-    # ---------- USER TARGET ----------
-    user = (
-        reply.from_user
-        if reply and reply.from_user
-        else message.from_user
-    )
+async def get_id(c, m):
+    r = m.reply_to_message
+    u = r.from_user if r and r.from_user else m.from_user
+    chat_type = m.chat.type
 
     # ---------- ADMIN BADGE ----------
     badge = "👤 Member"
-    if message.chat.type in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP):
+    if chat_type in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP):
         try:
-            member = await message.chat.get_member(user.id)
-            if member.status == enums.ChatMemberStatus.OWNER:
-                badge = "👑 Owner"
-            elif member.status in (
-                enums.ChatMemberStatus.ADMINISTRATOR,
-                enums.ChatMemberStatus.ADMIN
-            ):
-                badge = "🛡 Admin"
-        except Exception:
-            pass
+            stat = (await m.chat.get_member(u.id)).status
+            badge = "👑 Owner" if stat == enums.ChatMemberStatus.OWNER else "🛡 Admin" if stat in (enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.ADMIN) else badge
+        except: pass
 
-    # ---------- USER INFO ----------
-    text = (
-        "🆔 <b>ID INFORMATION</b>\n\n"
-        f"👤 <b>Name:</b> {user.first_name or ''} {user.last_name or ''}\n"
-        f"🦹 <b>User ID:</b> <code>{user.id}</code>\n"
-        f"🏷 <b>Username:</b> @{user.username if user.username else 'N/A'}\n"
-        f"🌐 <b>DC ID:</b> <code>{user.dc_id or 'Unknown'}</code>\n"
-        f"🤖 <b>Bot:</b> {'Yes' if user.is_bot else 'No'}\n"
-        f"{badge}\n"
-        f"🔗 <b>Profile:</b> <a href='tg://user?id={user.id}'>Open</a>\n"
-    )
-
-    # ---------- CHAT & MESSAGE INFO ----------
-    text += (
-        "\n💬 <b>CHAT & MESSAGE INFO</b>\n\n"
-        f"🆔 <b>Chat ID:</b> <code>{message.chat.id}</code>\n"
-        f"🏷 <b>Chat Type:</b> <code>{message.chat.type.name}</code>\n"
-        f"📩 <b>Message ID:</b> <code>{message.id}</code>\n"
+    # ---------- USER & CHAT INFO ----------
+    txt = (
+        f"🆔 <b>ID INFORMATION</b>\n\n👤 <b>Name:</b> {u.first_name or ''} {u.last_name or ''}\n"
+        f"🦹 <b>User ID:</b> <code>{u.id}</code>\n🏷 <b>Username:</b> @{u.username or 'N/A'}\n"
+        f"🌐 <b>DC ID:</b> <code>{u.dc_id or 'Unknown'}</code>\n🤖 <b>Bot:</b> {'Yes' if u.is_bot else 'No'}\n"
+        f"{badge}\n🔗 <b>Profile:</b> <a href='tg://user?id={u.id}'>Open</a>\n\n"
+        f"💬 <b>CHAT & MESSAGE INFO</b>\n\n🆔 <b>Chat ID:</b> <code>{m.chat.id}</code>\n"
+        f"🏷 <b>Chat Type:</b> <code>{chat_type.name}</code>\n📩 <b>Message ID:</b> <code>{m.id}</code>\n"
     )
 
     # ---------- GROUP INFO ----------
-    if message.chat.type in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP):
-        text += (
-            "\n👥 <b>GROUP INFORMATION</b>\n\n"
-            f"📛 <b>Title:</b> {message.chat.title}\n"
-            f"🆔 <b>Group ID:</b> <code>{message.chat.id}</code>\n"
-            f"🔗 <b>Username:</b> @{message.chat.username if message.chat.username else 'N/A'}\n"
-        )
+    if chat_type in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP):
+        txt += f"\n👥 <b>GROUP INFORMATION</b>\n\n📛 <b>Title:</b> {m.chat.title}\n🆔 <b>Group ID:</b> <code>{m.chat.id}</code>\n🔗 <b>Username:</b> @{m.chat.username or 'N/A'}\n"
 
     # ---------- STICKER INFO ----------
-    if reply and reply.sticker:
-        st = reply.sticker
-        text += (
-            "\n🎭 <b>STICKER INFORMATION</b>\n\n"
-            f"🆔 <b>File ID:</b> <code>{st.file_id}</code>\n"
-            f"📦 <b>Set Name:</b> <code>{st.set_name or 'N/A'}</code>\n"
-            f"🔖 <b>Emoji:</b> {st.emoji or 'N/A'}\n"
-            f"📐 <b>Size:</b> {st.width}×{st.height}\n"
-            f"🎞 <b>Animated:</b> {'Yes' if st.is_animated else 'No'}\n"
-            f"🧩 <b>Video:</b> {'Yes' if st.is_video else 'No'}\n"
-        )
+    if r and r.sticker:
+        s = r.sticker
+        txt += f"\n🎭 <b>STICKER INFORMATION</b>\n\n🆔 <b>File ID:</b> <code>{s.file_id}</code>\n📦 <b>Set:</b> <code>{s.set_name or 'N/A'}</code>\n🔖 <b>Emoji:</b> {s.emoji or 'N/A'}\n📐 <b>Size:</b> {s.width}×{s.height}\n🎞 <b>Animated:</b> {'Yes' if s.is_animated else 'No'}\n🧩 <b>Video:</b> {'Yes' if s.is_video else 'No'}\n"
 
-    await message.reply_text(
-        text,
-        parse_mode=enums.ParseMode.HTML,
-        disable_web_page_preview=True
-    )
-
+    await m.reply_text(txt, disable_web_page_preview=True)
 
 # ======================================================
 # 🏓 PING
 # ======================================================
-
 @Client.on_message(filters.command("ping"))
-async def ping_cmd(client, message):
-    start = time.time()
-    msg = await message.reply_text("🏓 Pinging…")
-    end = time.time()
-
-    await msg.edit_text(
-        f"🏓 <b>Pong!</b>\n\n⚡ <code>{int((end - start) * 1000)} ms</code>",
-        parse_mode=enums.ParseMode.HTML
-    )
-
+async def ping_cmd(c, m):
+    s = time.time()
+    msg = await m.reply_text("🏓 Pinging…")
+    await msg.edit_text(f"🏓 <b>Pong!</b>\n\n⚡ <code>{int((time.time() - s) * 1000)} ms</code>")
 
 # ======================================================
 # 🤖 BOT INFO
 # ======================================================
-
 @Client.on_message(filters.command("botinfo"))
-async def bot_info(client, message):
-    uptime = int(time.time() - temp.START_TIME)
-    h = uptime // 3600
-    m = (uptime % 3600) // 60
-
-    text = (
+async def bot_info(c, m):
+    up = int(time.time() - temp.START_TIME)
+    await m.reply_text(
         f"🤖 <b>BOT INFO</b>\n\n"
-        f"⏱️ Uptime: <code>{h}h {m}m</code>\n"
+        f"⏱️ Uptime: <code>{up//3600}h {(up%3600)//60}m</code>\n"
         f"🐍 Python: <code>{sys.version.split()[0]}</code>\n"
         f"⚙️ Platform: <code>{platform.system()}</code>\n"
         f"📦 Library: <code>Hydrogram</code>\n"
@@ -124,26 +66,17 @@ async def bot_info(client, message):
         f"🚀 Mode: <code>Ultra-Pro</code>"
     )
 
-    await message.reply_text(text, parse_mode=enums.ParseMode.HTML)
-
-
 # ======================================================
-# 🕒 LAST ONLINE HELPER
+# 🕒 LAST ONLINE HELPER (MINIFIED)
 # ======================================================
-
-def last_online(user):
-    if user.is_bot:
-        return "🤖 Bot"
-    if user.status == enums.UserStatus.ONLINE:
-        return "🟢 Online"
-    if user.status == enums.UserStatus.RECENTLY:
-        return "Recently"
-    if user.status == enums.UserStatus.LAST_WEEK:
-        return "Within last week"
-    if user.status == enums.UserStatus.LAST_MONTH:
-        return "Within last month"
-    if user.status == enums.UserStatus.LONG_AGO:
-        return "Long time ago"
-    if user.status == enums.UserStatus.OFFLINE:
-        return user.last_online_date.strftime("%d %b %Y, %I:%M %p")
-    return "Unknown"
+def last_online(u):
+    if u.is_bot: return "🤖 Bot"
+    if u.status == enums.UserStatus.OFFLINE and u.last_online_date: return u.last_online_date.strftime("%d %b %Y, %I:%M %p")
+    
+    return {
+        enums.UserStatus.ONLINE: "🟢 Online",
+        enums.UserStatus.RECENTLY: "Recently",
+        enums.UserStatus.LAST_WEEK: "Within last week",
+        enums.UserStatus.LAST_MONTH: "Within last month",
+        enums.UserStatus.LONG_AGO: "Long time ago"
+    }.get(u.status, "Unknown")
