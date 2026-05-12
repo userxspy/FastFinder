@@ -1,47 +1,23 @@
 import random
 from hydrogram import Client, filters
-from hydrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from hydrogram.types import InlineKeyboardMarkup as IKM, InlineKeyboardButton as IKB
 from info import PICS, script
 
-
 # ======================================================
-# 🔘 START BUTTONS (MINIMAL)
+# 🔘 START BUTTON (MINIMAL)
 # ======================================================
-def start_buttons():
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("👨‍🚒 Help", callback_data="help")
-            ]
-        ]
-    )
-
+start_btn = lambda: IKM([[IKB("👨‍🚒 Help", "help")]])
 
 # ======================================================
 # 🚀 /start COMMAND (NORMAL - NOT FILE DELIVERY)
 # ======================================================
-@Client.on_message(
-    filters.command("start") & 
-    filters.private & 
-    ~filters.regex(r"file_")  # ✅ Exclude file delivery
-)
-async def start_cmd(client, message):
+@Client.on_message(filters.command("start") & filters.private & ~filters.regex(r"file_"))
+async def start_cmd(c, m):
     """Handle /start command for normal users"""
+    txt = script.START_TXT.format(m.from_user.mention, (await c.get_me()).mention)
+    
     try:
-        await message.reply_photo(
-            photo=random.choice(PICS),
-            caption=script.START_TXT.format(
-                message.from_user.mention,
-                (await client.get_me()).mention
-            ),
-            reply_markup=start_buttons()
-        )
-    except Exception as e:
-        # Fallback if photo fails
-        await message.reply_text(
-            text=script.START_TXT.format(
-                message.from_user.mention,
-                (await client.get_me()).mention
-            ),
-            reply_markup=start_buttons()
-        )
+        await m.reply_photo(random.choice(PICS) if PICS else None, caption=txt, reply_markup=start_btn())
+    except:
+        # Fallback if photo fails or PICS list is empty
+        await m.reply_text(txt, reply_markup=start_btn())
