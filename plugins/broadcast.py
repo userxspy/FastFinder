@@ -1,15 +1,9 @@
-import asyncio
-import time
+import asyncio, time
 from hydrogram import Client, filters
-from hydrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from hydrogram.types import InlineKeyboardButton as IKB, InlineKeyboardMarkup as IKM
 
 from database.users_chats_db import db
-from utils import (
-    broadcast_messages,
-    groups_broadcast_messages,
-    temp,
-    get_readable_time,
-)
+from utils import broadcast_messages, groups_broadcast_messages, temp, get_readable_time
 from info import ADMINS
 
 lock = asyncio.Lock()
@@ -17,169 +11,77 @@ lock = asyncio.Lock()
 # ======================================================
 # 🛑 CANCEL CALLBACK
 # ======================================================
-
 @Client.on_callback_query(filters.regex(r'^broadcast_cancel'))
-async def broadcast_cancel(_, query):
-    _, target = query.data.split("#")
-    if target == "users":
-        temp.USERS_CANCEL = True
-        await query.message.edit("🛑 Cancelling user broadcast…")
-    elif target == "groups":
-        temp.GROUPS_CANCEL = True
-        await query.message.edit("🛑 Cancelling group broadcast…")
-
+async def broadcast_cancel(c, q):
+    tgt = q.data.split("#")[1]
+    if tgt == "users": temp.USERS_CANCEL = True
+    elif tgt == "groups": temp.GROUPS_CANCEL = True
+    await q.message.edit(f"🛑 Cancelling {tgt[:-1]} broadcast…")
 
 # ======================================================
 # 📢 USER BROADCAST (SEGMENTED)
 # ======================================================
-
-@Client.on_message(
-    filters.command(
-        ["broadcast_all", "broadcast_premium", "broadcast_free", "pin_broadcast"]
-    )
-    & filters.user(ADMINS)
-    & filters.reply
-)
-async def user_broadcast(bot, message):
-    if lock.locked():
-        return await message.reply("⚠️ Another broadcast is already running.")
-
-    pin = message.command[0] == "pin_broadcast"
-    mode = message.command[0]
-
-    all_users = await db.get_all_users()
-
-    # --- segmentation ---
-    if mode == "broadcast_premium":
-        users = [u for u in all_users if u.get("status", {}).get("premium")]
-    elif mode == "broadcast_free":
-        users = [u for u in all_users if not u.get("status", {}).get("premium")]
-    else:
-        users = all_users
-
-    total = len(users)
-    if not users:
-        return await message.reply("❌ No users found for this broadcast.")
-
-    status = await message.reply_text("🚀 Broadcasting started…")
-    b_msg = message.reply_to_message
-
-    start_time = time.time()
-    done = success = failed = removed = 0
+@Client.on_message(filters.command(["broadcast_all", "broadcast_premium", "broadcast_free", "pin_broadcast"]) & filters.user(ADMINS) & filters.reply)
+async def user_broadcast(bot, m):
+    if lock.locked(): return await m.reply("⚠️ Another broadcast is already running.")
+    
+    cmd, pin = m.command[0], m.command[0] == "pin_broadcast"
+    all_u = await db.get_all_users()
+    
+    # 🧠 Smart Segmentation
+    users = [u for u in all_u if u.get("status", {}).get("premium")] if cmd == "broadcast_premium" else [u for u in all_u if not u.get("status", {}).get("premium")] if cmd == "broadcast_free" else all_u
+    tot = len(users)
+    
+    if not tot: return await m.reply("❌ No users found for this broadcast.")
+    
+    sts = await m.reply("🚀 Broadcasting started…")
+    b_msg, st_time, done, suc, fail = m.reply_to_message, time.time(), 0, 0, 0
 
     async with lock:
-        for batch in [users[i:i + 25] for i in range(0, total, 25)]:
-            if temp.USERS_CANCEL:
-                temp.USERS_CANCEL = False
-                break
+        for i in range(0, tot, 25):
+            if temp.USERS_CANCEL: temp.USERS_CANCEL = False; break
+            batch = users[i:i+25]
+            res = await asyncio.gather(*[broadcast_messages(int(u["id"]), b_msg, pin) for u in batch], return_exceptions=True)
 
-            results = await asyncio.gather(
-                *[
-                    broadcast_messages(int(u["id"]), b_msg, pin)
-                    for u in batch
-                ],
-                return_exceptions=True
-            )
-
-            for u, res in zip(batch, results):
+            for u, r in zip(batch, res):
                 done += 1
-                if res == "Success":
-                    success += 1
-                else:
-                    failed += 1
-                    removed += 1
-                    await db.delete_user(int(u["id"]))
+                if r == "Success": suc += 1
+                else: fail += 1; await db.delete_user(int(u["id"])) # 🧹 Remove inactive
 
             if done % 100 == 0:
-                btn = [[InlineKeyboardButton("❌ CANCEL", callback_data="broadcast_cancel#users")]]
-                await status.edit(
-                    f"📣 <b>Broadcasting…</b>\n\n"
-                    f"👥 Total: <code>{total}</code>\n"
-                    f"✅ Success: <code>{success}</code>\n"
-                    f"❌ Failed: <code>{failed}</code>\n"
-                    f"🧹 Removed inactive: <code>{removed}</code>\n"
-                    f"📊 Progress: <code>{done}/{total}</code>\n"
-                    f"⏱ Time: {get_readable_time(time.time() - start_time)}",
-                    reply_markup=InlineKeyboardMarkup(btn),
-                )
-
+                await sts.edit(f"📣 <b>Broadcasting…</b>\n\n👥 Total: <code>{tot}</code>\n✅ Success: <code>{suc}</code>\n❌ Failed/Removed: <code>{fail}</code>\n📊 Progress: <code>{done}/{tot}</code>\n⏱ Time: {get_readable_time(time.time() - st_time)}", reply_markup=IKM([[IKB("❌ CANCEL", "broadcast_cancel#users")]]))
             await asyncio.sleep(0.4)
 
-    await status.edit(
-        f"✅ <b>Broadcast Completed</b>\n\n"
-        f"👥 Target users: <code>{total}</code>\n"
-        f"✅ Success: <code>{success}</code>\n"
-        f"❌ Failed: <code>{failed}</code>\n"
-        f"🧹 Inactive removed: <code>{removed}</code>\n"
-        f"⏱ Duration: {get_readable_time(time.time() - start_time)}"
-    )
-
+    await sts.edit(f"✅ <b>Broadcast Completed</b>\n\n👥 Target users: <code>{tot}</code>\n✅ Success: <code>{suc}</code>\n❌ Failed/Removed: <code>{fail}</code>\n⏱ Duration: {get_readable_time(time.time() - st_time)}")
 
 # ======================================================
 # 📡 GROUP BROADCAST
 # ======================================================
-
-@Client.on_message(
-    filters.command(["grp_broadcast", "pin_grp_broadcast"])
-    & filters.user(ADMINS)
-    & filters.reply
-)
-async def group_broadcast(bot, message):
-    if lock.locked():
-        return await message.reply("⚠️ Another broadcast is running.")
-
-    pin = message.command[0] == "pin_grp_broadcast"
-    groups = await db.get_all_chats()
-    total = len(groups)
-
-    if not groups:
-        return await message.reply("❌ No groups found.")
-
-    status = await message.reply_text("🚀 Group broadcast started…")
-    b_msg = message.reply_to_message
-
-    start_time = time.time()
-    done = success = failed = 0
+@Client.on_message(filters.command(["grp_broadcast", "pin_grp_broadcast"]) & filters.user(ADMINS) & filters.reply)
+async def group_broadcast(bot, m):
+    if lock.locked(): return await m.reply("⚠️ Another broadcast is running.")
+    
+    pin, grps = m.command[0] == "pin_grp_broadcast", await db.get_all_chats()
+    tot = len(grps)
+    
+    if not tot: return await m.reply("❌ No groups found.")
+    
+    sts = await m.reply("🚀 Group broadcast started…")
+    b_msg, st_time, done, suc, fail = m.reply_to_message, time.time(), 0, 0, 0
 
     async with lock:
-        for batch in [groups[i:i + 15] for i in range(0, total, 15)]:
-            if temp.GROUPS_CANCEL:
-                temp.GROUPS_CANCEL = False
-                break
+        for i in range(0, tot, 15):
+            if temp.GROUPS_CANCEL: temp.GROUPS_CANCEL = False; break
+            batch = grps[i:i+15]
+            res = await asyncio.gather(*[groups_broadcast_messages(int(g["id"]), b_msg, pin) for g in batch], return_exceptions=True)
 
-            results = await asyncio.gather(
-                *[
-                    groups_broadcast_messages(int(g["id"]), b_msg, pin)
-                    for g in batch
-                ],
-                return_exceptions=True
-            )
-
-            for res in results:
+            for r in res:
                 done += 1
-                if res == "Success":
-                    success += 1
-                else:
-                    failed += 1
+                if r == "Success": suc += 1
+                else: fail += 1
 
             if done % 30 == 0:
-                btn = [[InlineKeyboardButton("❌ CANCEL", callback_data="broadcast_cancel#groups")]]
-                await status.edit(
-                    f"📡 <b>Group Broadcast…</b>\n\n"
-                    f"💬 Total: <code>{total}</code>\n"
-                    f"✅ Success: <code>{success}</code>\n"
-                    f"❌ Failed: <code>{failed}</code>\n"
-                    f"📊 Progress: <code>{done}/{total}</code>\n"
-                    f"⏱ Time: {get_readable_time(time.time() - start_time)}",
-                    reply_markup=InlineKeyboardMarkup(btn),
-                )
-
+                await sts.edit(f"📡 <b>Group Broadcast…</b>\n\n💬 Total: <code>{tot}</code>\n✅ Success: <code>{suc}</code>\n❌ Failed: <code>{fail}</code>\n📊 Progress: <code>{done}/{tot}</code>\n⏱ Time: {get_readable_time(time.time() - st_time)}", reply_markup=IKM([[IKB("❌ CANCEL", "broadcast_cancel#groups")]]))
             await asyncio.sleep(1)
 
-    await status.edit(
-        f"✅ <b>Group Broadcast Completed</b>\n\n"
-        f"💬 Total groups: <code>{total}</code>\n"
-        f"✅ Success: <code>{success}</code>\n"
-        f"❌ Failed: <code>{failed}</code>\n"
-        f"⏱ Duration: {get_readable_time(time.time() - start_time)}"
-    )
+    await sts.edit(f"✅ <b>Group Broadcast Completed</b>\n\n💬 Total groups: <code>{tot}</code>\n✅ Success: <code>{suc}</code>\n❌ Failed: <code>{fail}</code>\n⏱ Duration: {get_readable_time(time.time() - st_time)}")
