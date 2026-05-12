@@ -1,12 +1,9 @@
-import os
-import sys
-import time
-import asyncio
+import os, sys, time, asyncio
 from datetime import datetime, timedelta
 from collections import defaultdict
 
 from hydrogram import Client, filters
-from hydrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
+from hydrogram.types import InlineKeyboardButton as IKB, InlineKeyboardMarkup as IKM, CallbackQuery
 from hydrogram.errors import MessageNotModified, MessageIdInvalid, BadRequest, ListenerTimeout
 
 from info import ADMINS, LOG_CHANNEL
@@ -14,651 +11,163 @@ from database.users_chats_db import db
 from database.ia_filterdb import db_count_documents, delete_files, delete_all_files, delete_file_by_id, delete_by_quality
 from utils import get_size, get_readable_time, temp
 
-
 # ======================================================
 # 🧠 CONFIG & SAFE INIT
 # ======================================================
+DASH_REFRESH, DASH_CACHE, DASH_LOCKS = 45, {}, defaultdict(asyncio.Lock)
 
-DASH_REFRESH = 45
-DASH_CACHE = {}
-DASH_LOCKS = defaultdict(asyncio.Lock)
-
-# Safe init
-if not hasattr(temp, "INDEX_STATS"):
-    temp.INDEX_STATS = {"running": False, "start": 0, "saved": 0}
-
-if not hasattr(temp, "START_TIME"):
-    temp.START_TIME = time.time()
-
+if not hasattr(temp, "INDEX_STATS"): temp.INDEX_STATS = {"running": False, "start": 0, "saved": 0}
+if not hasattr(temp, "START_TIME"): temp.START_TIME = time.time()
 
 # ======================================================
-# 🛡 SAFE HELPERS
+# 🛡 SAFE HELPERS & UI BUILDERS
 # ======================================================
-
 async def safe_edit(msg, text, **kwargs):
-    try:
-        if msg.text == text:
-            return True
-        await msg.edit(text, **kwargs)
-        return True
-    except (MessageNotModified, MessageIdInvalid, BadRequest):
-        return False
-    except Exception:
-        return False
+    if msg.text == text: return True
+    try: await msg.edit(text, **kwargs); return True
+    except (MessageNotModified, MessageIdInvalid, BadRequest, Exception): return False
 
+async def safe_answer(q, text="", alert=False):
+    try: await q.answer(text, show_alert=alert)
+    except: pass
 
-async def safe_answer(query, text="", alert=False):
-    try:
-        await query.answer(text, show_alert=alert)
-    except Exception:
-        pass
+fmt = lambda dt: (datetime.utcfromtimestamp(dt) if isinstance(dt, (int, float)) else dt).strftime("%d %b %Y, %I:%M %p")
 
-
-def fmt(dt):
-    """Format datetime"""
-    if isinstance(dt, (int, float)):
-        dt = datetime.utcfromtimestamp(dt)
-    return dt.strftime("%d %b %Y, %I:%M %p")
-
-
-# ======================================================
-# 📊 DASHBOARD BUILDER
-# ======================================================
+# BUTTONS (Minified)
+admin_btns = lambda: IKM([[IKB("💎 Premium", "admin_premium"), IKB("🗑 Delete Files", "admin_delete")], [IKB("🔄 Refresh", "admin_refresh"), IKB("🔄 Restart Bot", "admin_restart")], [IKB("❌ Close", "close_data")]])
+prm_btns = lambda: IKM([[IKB("➕ Add", "prm_add"), IKB("➖ Remove", "prm_remove"), IKB("⏳ Extend", "prm_extend")], [IKB("🔍 Check User", "prm_check")], [IKB("⏰ 3d", "prm_exp_3"), IKB("⏰ 7d", "prm_exp_7"), IKB("⏰ 30d", "prm_exp_30")], [IKB("📊 Expiry Chart", "prm_chart")], [IKB("🔙 Back", "admin_back")]])
+del_btns = lambda: IKM([[IKB("🔍 By Keyword", "del_keyword"), IKB("📹 By Quality", "del_quality")], [IKB("🗑 Delete ALL", "del_all_confirm")], [IKB("🔙 Back", "admin_back")]])
+delq_btns = lambda: IKM([[IKB(q, f"delq_{q}") for q in ["360p", "480p", "720p"]], [IKB(q, f"delq_{q}") for q in ["1080p", "1440p", "2160p"]], [IKB("🔙 Back", "admin_delete")]])
 
 async def build_dashboard():
-    stats = {
-        "users": 0,
-        "chats": 0,
-        "files": 0,
-        "premium": 0,
-        "used_data": "0 B",
-        "uptime": "N/A",
-        "now": datetime.fromtimestamp(time.time()).strftime("%d %b %Y, %I:%M %p")
-    }
+    s = {"users": 0, "chats": 0, "files": 0, "premium": 0, "data": 0}
+    try: s["users"] = await db.total_users_count()
+    except: pass
+    try: s["chats"] = await asyncio.to_thread(db.groups.count_documents, {})
+    except: pass
+    try: s["files"] = await asyncio.to_thread(db_count_documents)
+    except: pass
+    try: s["premium"] = await asyncio.to_thread(db.premium.count_documents, {"plan.premium": True})
+    except: pass
+    try: s["data"] = (await asyncio.to_thread(db.users.database.command, "dbstats")).get("dataSize", 0)
+    except: pass
 
-    try:
-        stats["users"] = await db.total_users_count()
-    except:
-        pass
-
-    try:
-        stats["chats"] = await asyncio.to_thread(db.groups.count_documents, {})
-    except:
-        pass
-
-    try:
-        stats["files"] = await asyncio.to_thread(db_count_documents)
-    except:
-        pass
-
-    try:
-        stats["premium"] = await asyncio.to_thread(
-            db.premium.count_documents, {"plan.premium": True}
-        )
-    except:
-        pass
-
-    try:
-        info = await asyncio.to_thread(db.users.database.command, "dbstats")
-        stats["used_data"] = get_size(info.get("dataSize", 0))
-    except:
-        pass
-
-    try:
-        stats["uptime"] = get_readable_time(time.time() - temp.START_TIME)
-    except:
-        pass
-
-    idx_text = "❌ Not running"
-    try:
-        idx = temp.INDEX_STATS
-        if idx.get("running"):
-            dur = max(1, time.time() - idx.get("start", time.time()))
-            speed = idx.get("saved", 0) / dur
-            idx_text = f"🚀 {speed:.2f} files/sec"
-    except:
-        pass
-
-    return (
-        "📊 <b>ADMIN CONTROL PANEL</b>\n\n"
-        f"👤 <b>Users</b>        : <code>{stats['users']}</code>\n"
-        f"👥 <b>Groups</b>       : <code>{stats['chats']}</code>\n"
-        f"📦 <b>Indexed Files</b>: <code>{stats['files']}</code>\n"
-        f"💎 <b>Premium Users</b>: <code>{stats['premium']}</code>\n\n"
-        f"⚡ <b>Index Speed</b>  : <code>{idx_text}</code>\n"
-        f"🗃 <b>DB Size</b>      : <code>{stats['used_data']}</code>\n\n"
-        f"⏱ <b>Uptime</b>       : <code>{stats['uptime']}</code>\n"
-        f"🔄 <b>Updated</b>      : <code>{stats['now']}</code>"
-    )
-
+    idx = temp.INDEX_STATS
+    speed = f"🚀 {idx['saved']/max(1, time.time()-idx['start']):.2f} files/sec" if idx.get("running") else "❌ Not running"
+    
+    return (f"📊 <b>ADMIN CONTROL PANEL</b>\n\n👤 <b>Users</b>: <code>{s['users']}</code>\n👥 <b>Groups</b>: <code>{s['chats']}</code>\n"
+            f"📦 <b>Indexed</b>: <code>{s['files']}</code>\n💎 <b>Premium</b>: <code>{s['premium']}</code>\n\n"
+            f"⚡ <b>Index Speed</b>: <code>{speed}</code>\n🗃 <b>DB Size</b>: <code>{get_size(s['data'])}</code>\n\n"
+            f"⏱ <b>Uptime</b>: <code>{get_readable_time(time.time() - temp.START_TIME)}</code>\n🔄 <b>Updated</b>: <code>{fmt(time.time())}</code>")
 
 # ======================================================
-# 🎛 MAIN ADMIN PANEL BUTTONS
+# 🚀 ADMIN PANEL & CORE ROUTER
 # ======================================================
-
-def admin_panel_buttons():
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("💎 Premium", callback_data="admin_premium"),
-            InlineKeyboardButton("🗑 Delete Files", callback_data="admin_delete")
-        ],
-        [
-            InlineKeyboardButton("🔄 Refresh", callback_data="admin_refresh"),
-            InlineKeyboardButton("🔄 Restart Bot", callback_data="admin_restart")
-        ],
-        [
-            InlineKeyboardButton("❌ Close", callback_data="close_data")
-        ]
-    ])
-
-
-def premium_panel_buttons():
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("➕ Add", callback_data="prm_add"),
-            InlineKeyboardButton("➖ Remove", callback_data="prm_remove"),
-            InlineKeyboardButton("⏳ Extend", callback_data="prm_extend")
-        ],
-        [
-            InlineKeyboardButton("🔍 Check User", callback_data="prm_check")
-        ],
-        [
-            InlineKeyboardButton("⏰ Expiring 3d", callback_data="prm_exp_3"),
-            InlineKeyboardButton("⏰ 7d", callback_data="prm_exp_7"),
-            InlineKeyboardButton("⏰ 30d", callback_data="prm_exp_30")
-        ],
-        [
-            InlineKeyboardButton("📊 Expiry Chart", callback_data="prm_chart")
-        ],
-        [
-            InlineKeyboardButton("🔙 Back", callback_data="admin_back")
-        ]
-    ])
-
-
-def delete_panel_buttons():
-    """Delete files management panel"""
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🔍 Delete by Keyword", callback_data="del_keyword"),
-            InlineKeyboardButton("📹 Delete by Quality", callback_data="del_quality")
-        ],
-        [
-            InlineKeyboardButton("🗑 Delete ALL Files", callback_data="del_all_confirm")
-        ],
-        [
-            InlineKeyboardButton("🔙 Back", callback_data="admin_back")
-        ]
-    ])
-
-
-def delete_quality_buttons():
-    """Quality selection for deletion"""
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("360p", callback_data="delq_360p"),
-            InlineKeyboardButton("480p", callback_data="delq_480p"),
-            InlineKeyboardButton("720p", callback_data="delq_720p")
-        ],
-        [
-            InlineKeyboardButton("1080p", callback_data="delq_1080p"),
-            InlineKeyboardButton("1440p", callback_data="delq_1440p"),
-            InlineKeyboardButton("2160p", callback_data="delq_2160p")
-        ],
-        [
-            InlineKeyboardButton("🔙 Back", callback_data="admin_delete")
-        ]
-    ])
-
-
-# ======================================================
-# 🚀 /admin COMMAND - UNIFIED PANEL
-# ======================================================
-
 @Client.on_message(filters.command(["admin", "dashboard"]) & filters.user(ADMINS))
-async def open_admin_panel(bot, message):
-    msg = await message.reply("⏳ Loading admin panel...")
-    text = await build_dashboard()
-    await safe_edit(msg, text, reply_markup=admin_panel_buttons())
+async def open_admin_panel(bot, m):
+    msg = await m.reply("⏳ Loading admin panel...")
+    await safe_edit(msg, await build_dashboard(), reply_markup=admin_btns())
 
-
-# ======================================================
-# 🔁 MAIN ADMIN CALLBACKS
-# ======================================================
-
-@Client.on_callback_query(filters.regex("^admin_"))
-async def admin_callbacks(bot, query: CallbackQuery):
-    if query.from_user.id not in ADMINS:
-        return await safe_answer(query, "Admins only", True)
-
-    action = query.data
-
-    # Dashboard refresh
-    if action == "admin_refresh":
-        async with DASH_LOCKS[query.from_user.id]:
-            text = await build_dashboard()
-            await safe_edit(query.message, text, reply_markup=admin_panel_buttons())
-            await safe_answer(query, "✅ Updated")
-
-    # Premium panel
-    elif action == "admin_premium":
-        total = db.premium.count_documents({"plan.premium": True})
-        await safe_edit(
-            query.message,
-            (
-                "💎 <b>Premium Management Panel</b>\n\n"
-                f"👤 Active Premium : <code>{total}</code>\n"
-                f"🕒 Time : <code>{fmt(datetime.utcnow())}</code>"
-            ),
-            reply_markup=premium_panel_buttons()
-        )
-        await safe_answer(query)
-
-    # Delete files panel
-    elif action == "admin_delete":
-        file_count = await asyncio.to_thread(db_count_documents)
-        await safe_edit(
-            query.message,
-            "🗑 <b>Delete Files Management</b>\n\n"
-            f"📦 Total Files: <code>{file_count}</code>\n\n"
-            "Choose deletion method:",
-            reply_markup=delete_panel_buttons()
-        )
-        await safe_answer(query)
-
-    # Restart bot
-    elif action == "admin_restart":
-        await safe_answer(query, "🔄 Restarting bot...", True)
-        await safe_edit(query.message, "⏳ Restarting...")
-        try:
-            os.execl(sys.executable, sys.executable, "bot.py")
-        except Exception as e:
-            await safe_edit(query.message, f"❌ Restart failed: {e}")
-
-    # Back to main panel
-    elif action == "admin_back":
-        text = await build_dashboard()
-        await safe_edit(query.message, text, reply_markup=admin_panel_buttons())
-        await safe_answer(query)
-
-
-# ======================================================
-# 🗑 DELETE CALLBACKS
-# ======================================================
-
-@Client.on_callback_query(filters.regex("^del_"))
-async def delete_callbacks(bot, query: CallbackQuery):
-    if query.from_user.id not in ADMINS:
-        return await safe_answer(query, "Admins only", True)
-
-    action = query.data
-
-    # Delete by keyword
-    if action == "del_keyword":
-        await safe_edit(
-            query.message,
-            "🔍 <b>Delete Files by Keyword</b>\n\n"
-            "Use command:\n<code>/delete keyword</code>\n\n"
-            "Example: <code>/delete movie_name</code>\n\n"
-            "This will delete all files matching the keyword.",
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("🔙 Back", callback_data="admin_delete")]]
-            )
-        )
-        await safe_answer(query)
-
-    # Delete by quality
-    elif action == "del_quality":
-        await safe_edit(
-            query.message,
-            "📹 <b>Delete Files by Quality</b>\n\n"
-            "Select quality to delete all files of that quality:",
-            reply_markup=delete_quality_buttons()
-        )
-        await safe_answer(query)
-
-    # Delete ALL confirmation
-    elif action == "del_all_confirm":
-        file_count = await asyncio.to_thread(db_count_documents)
-        await safe_edit(
-            query.message,
-            f"⚠️ <b>WARNING: Delete ALL Files</b>\n\n"
-            f"📦 Total Files: <code>{file_count}</code>\n\n"
-            f"❗ This will permanently delete ALL {file_count} files from the database!\n\n"
-            "Are you absolutely sure?",
-            reply_markup=InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("✅ Yes, Delete ALL", callback_data="del_all_execute"),
-                    InlineKeyboardButton("❌ Cancel", callback_data="admin_delete")
-                ]
-            ])
-        )
-        await safe_answer(query)
-
-    # Execute delete ALL
-    elif action == "del_all_execute":
-        await safe_answer(query, "🗑 Deleting all files...", True)
-        msg = await query.message.edit("⏳ Deleting all files from database...")
-        
-        try:
-            count = await delete_all_files()
-            await msg.edit(
-                f"✅ <b>Successfully Deleted ALL Files</b>\n\n"
-                f"🗑 Deleted: <code>{count}</code> files\n"
-                f"🕒 Time: <code>{fmt(datetime.utcnow())}</code>",
-                reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("🔙 Back to Dashboard", callback_data="admin_back")]]
-                )
-            )
-            
-            # Log to channel
-            try:
-                await bot.send_message(
-                    LOG_CHANNEL,
-                    f"🗑 <b>ALL FILES DELETED</b>\n\n"
-                    f"👤 Admin: {query.from_user.mention}\n"
-                    f"🗑 Deleted: <code>{count}</code> files\n"
-                    f"🕒 Time: <code>{fmt(datetime.utcnow())}</code>"
-                )
-            except:
-                pass
-                
-        except Exception as e:
-            await msg.edit(f"❌ Error deleting files: {e}")
-
-
-# ======================================================
-# 📹 DELETE BY QUALITY CALLBACKS
-# ======================================================
-
-@Client.on_callback_query(filters.regex("^delq_"))
-async def delete_quality_callbacks(bot, query: CallbackQuery):
-    if query.from_user.id not in ADMINS:
-        return await safe_answer(query, "Admins only", True)
-
-    quality = query.data.replace("delq_", "")
+@Client.on_callback_query(filters.regex("^(admin_|close_data$)"))
+async def admin_callbacks(bot, q: CallbackQuery):
+    if q.from_user.id not in ADMINS: return await safe_answer(q, "Admins only", True)
     
-    await safe_answer(query, f"🗑 Deleting {quality} files...", True)
-    msg = await query.message.edit(f"⏳ Deleting all {quality} files...")
+    d = q.data
+    if d == "close_data": return await q.message.delete()
+    elif d in ["admin_refresh", "admin_back"]:
+        async with DASH_LOCKS[q.from_user.id]: await safe_edit(q.message, await build_dashboard(), reply_markup=admin_btns())
+    elif d == "admin_premium":
+        await safe_edit(q.message, f"💎 <b>Premium Management</b>\n\n👤 Active: <code>{await asyncio.to_thread(db.premium.count_documents, {'plan.premium': True})}</code>\n🕒 {fmt(datetime.utcnow())}", reply_markup=prm_btns())
+    elif d == "admin_delete":
+        await safe_edit(q.message, f"🗑 <b>Delete Files</b>\n\n📦 Total: <code>{await asyncio.to_thread(db_count_documents)}</code>\nChoose method:", reply_markup=del_btns())
+    elif d == "admin_restart":
+        await safe_edit(q.message, "⏳ Restarting..."); os.execl(sys.executable, sys.executable, "bot.py")
+    await safe_answer(q, "✅ Action Completed" if "refresh" in d else "")
+
+# ======================================================
+# 🗑 DELETE MANAGEMENT (Merged Handlers)
+# ======================================================
+@Client.on_callback_query(filters.regex("^(del_|delq_)"))
+async def delete_callbacks(bot, q: CallbackQuery):
+    if q.from_user.id not in ADMINS: return await safe_answer(q, "Admins only", True)
     
-    try:
-        count = await delete_by_quality(quality)
-        await msg.edit(
-            f"✅ <b>Deleted {quality} Files</b>\n\n"
-            f"🗑 Deleted: <code>{count}</code> files\n"
-            f"📹 Quality: <code>{quality}</code>\n"
-            f"🕒 Time: <code>{fmt(datetime.utcnow())}</code>",
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("🔙 Back", callback_data="admin_delete")]]
-            )
-        )
-        
-        # Log to channel
+    d = q.data
+    if d == "del_keyword": await safe_edit(q.message, "🔍 <b>Delete by Keyword</b>\nUse: <code>/delete movie_name</code>", reply_markup=IKM([[IKB("🔙 Back", "admin_delete")]]))
+    elif d == "del_quality": await safe_edit(q.message, "📹 <b>Delete by Quality</b>\nSelect quality:", reply_markup=delq_btns())
+    elif d == "del_all_confirm": await safe_edit(q.message, f"⚠️ <b>WARNING</b>\n❗ This permanently deletes ALL <code>{await asyncio.to_thread(db_count_documents)}</code> files. Sure?", reply_markup=IKM([[IKB("✅ Yes, Delete", "del_all_execute"), IKB("❌ Cancel", "admin_delete")]]))
+    elif d == "del_all_execute" or d.startswith("delq_"):
+        qual = d.split("_")[1] if d.startswith("delq_") else None
+        msg = await q.message.edit(f"⏳ Deleting {'all '+qual if qual else 'ALL'} files...")
         try:
-            await bot.send_message(
-                LOG_CHANNEL,
-                f"🗑 <b>Files Deleted by Quality</b>\n\n"
-                f"👤 Admin: {query.from_user.mention}\n"
-                f"📹 Quality: <code>{quality}</code>\n"
-                f"🗑 Deleted: <code>{count}</code> files\n"
-                f"🕒 Time: <code>{fmt(datetime.utcnow())}</code>"
-            )
-        except:
-            pass
-            
-    except Exception as e:
-        await msg.edit(f"❌ Error: {e}")
-
+            count = await delete_by_quality(qual) if qual else await delete_all_files()
+            txt = f"✅ <b>Deleted {'Quality: '+qual if qual else 'ALL'} Files</b>\n🗑 Count: <code>{count}</code>\n🕒 {fmt(datetime.utcnow())}"
+            await msg.edit(txt, reply_markup=IKM([[IKB("🔙 Back", "admin_delete")]]))
+            try: await bot.send_message(LOG_CHANNEL, f"🗑 <b>Admin Deletion</b>\n👤 {q.from_user.mention}\n{txt}")
+            except: pass
+        except Exception as e: await msg.edit(f"❌ Error: {e}")
+    await safe_answer(q)
 
 # ======================================================
-# 💎 PREMIUM CALLBACKS
+# 💎 PREMIUM MANAGEMENT (Merged Handlers)
 # ======================================================
-
 @Client.on_callback_query(filters.regex("^prm_"))
-async def premium_callbacks(bot, query: CallbackQuery):
-    if query.from_user.id not in ADMINS:
-        return await safe_answer(query, "Admins only", True)
-
-    action = query.data
-    now = datetime.utcnow()
-
-    await safe_answer(query)
-
-    # Expiring soon (3/7/30 days)
-    if action.startswith("prm_exp_"):
-        days = int(action.split("_")[-1])
-        limit = now + timedelta(days=days)
-
-        users = await db.get_premium_users()
-        result = []
-
-        for u in users:
-            uid = u.get("id")
-            if uid in ADMINS:
-                continue
-
-            plan = u.get("plan", {})
-            expire = plan.get("expire")
-            if not expire:
-                continue
-
-            if isinstance(expire, (int, float)):
-                expire = datetime.utcfromtimestamp(expire)
-
-            if now <= expire <= limit:
-                left = int((expire - now).total_seconds())
-                result.append(f"👤 <code>{uid}</code> → ⏳ {get_readable_time(left)}")
-
-            if len(result) >= 20:
-                break
-
-        if not result:
-            await safe_edit(
-                query.message,
-                f"✅ No premium users expiring in next {days} days.\n\n"
-                "Use /premium to return to panel.",
-                reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("🔙 Back", callback_data="admin_premium")]]
-                )
-            )
-        else:
-            await safe_edit(
-                query.message,
-                f"⏰ <b>Premium Expiring in {days} Days</b>\n\n" + "\n".join(result),
-                reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("🔙 Back", callback_data="admin_premium")]]
-                )
-            )
-
-    # Expiry chart
-    elif action == "prm_chart":
-        users = await db.get_premium_users()
-        c_3 = c_7 = c_30 = c_30p = 0
-
-        for u in users:
-            uid = u.get("id")
-            if uid in ADMINS:
-                continue
-
-            plan = u.get("plan", {})
-            expire = plan.get("expire")
-            if not expire:
-                continue
-
-            if isinstance(expire, (int, float)):
-                expire = datetime.utcfromtimestamp(expire)
-
-            days_left = (expire - now).days
-
-            if days_left <= 3:
-                c_3 += 1
-            elif days_left <= 7:
-                c_7 += 1
-            elif days_left <= 30:
-                c_30 += 1
-            else:
-                c_30p += 1
-
-        await safe_edit(
-            query.message,
-            "📊 <b>Premium Expiry Chart</b>\n\n"
-            f"🟥 0–3 days   : <code>{c_3}</code>\n"
-            f"🟧 4–7 days   : <code>{c_7}</code>\n"
-            f"🟨 8–30 days  : <code>{c_30}</code>\n"
-            f"🟩 30+ days   : <code>{c_30p}</code>",
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("🔙 Back", callback_data="admin_premium")]]
-            )
-        )
-
-    # Check user
-    elif action == "prm_check":
-        await safe_edit(
-            query.message,
-            "🔍 <b>Check Premium Status</b>\n\n"
-            "Reply with user ID to check their premium status.",
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("🔙 Back", callback_data="admin_premium")]]
-            )
-        )
-
-    # Add premium
-    elif action == "prm_add":
-        await safe_edit(
-            query.message,
-            "➕ <b>Add Premium</b>\n\n"
-            "Use command:\n<code>/addpremium user_id days</code>\n\n"
-            "Example: <code>/addpremium 123456789 30</code>",
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("🔙 Back", callback_data="admin_premium")]]
-            )
-        )
-
-    # Remove premium
-    elif action == "prm_remove":
-        await safe_edit(
-            query.message,
-            "➖ <b>Remove Premium</b>\n\n"
-            "Use command:\n<code>/removepremium user_id</code>\n\n"
-            "Example: <code>/removepremium 123456789</code>",
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("🔙 Back", callback_data="admin_premium")]]
-            )
-        )
-
-    # Extend premium
-    elif action == "prm_extend":
-        await safe_edit(
-            query.message,
-            "⏳ <b>Extend Premium</b>\n\n"
-            "Use command:\n<code>/extendpremium user_id days</code>\n\n"
-            "Example: <code>/extendpremium 123456789 15</code>",
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("🔙 Back", callback_data="admin_premium")]]
-            )
-        )
-
-
-# ======================================================
-# 🗑 DELETE FILES COMMAND
-# ======================================================
-
-@Client.on_message(filters.command("delete") & filters.user(ADMINS))
-async def delete_cmd(bot, message):
-    if len(message.command) < 2:
-        return await message.reply(
-            "❌ <b>Usage:</b> <code>/delete keyword</code>\n\n"
-            "This will delete all files matching the keyword."
-        )
-
-    key = message.text.split(" ", 1)[1].strip()
-    msg = await message.reply(f"⏳ Deleting files for `{key}`...")
+async def premium_callbacks(bot, q: CallbackQuery):
+    if q.from_user.id not in ADMINS: return await safe_answer(q, "Admins only", True)
+    d = q.data; now = datetime.utcnow()
     
-    try:
-        count = await delete_files(key)
-        await msg.edit(
-            f"✅ <b>Files Deleted</b>\n\n"
-            f"🗑 Deleted: <code>{count}</code> files\n"
-            f"🔍 Keyword: <code>{key}</code>\n"
-            f"🕒 Time: <code>{fmt(datetime.utcnow())}</code>"
-        )
+    cmds = {
+        "prm_add": ("➕ Add Premium", "/addpremium user_id days"),
+        "prm_remove": ("➖ Remove Premium", "/removepremium user_id"),
+        "prm_extend": ("⏳ Extend Premium", "/extendpremium user_id days"),
+        "prm_check": ("🔍 Check Premium", "Reply with user ID")
+    }
+    
+    if d in cmds:
+        t, c = cmds[d]
+        await safe_edit(q.message, f"{t}\nUse:\n<code>{c}</code>", reply_markup=IKM([[IKB("🔙 Back", "admin_premium")]]))
         
-        # Log to channel
-        try:
-            await bot.send_message(
-                LOG_CHANNEL,
-                f"🗑 <b>Files Deleted</b>\n\n"
-                f"👤 Admin: {message.from_user.mention}\n"
-                f"🔍 Keyword: <code>{key}</code>\n"
-                f"🗑 Deleted: <code>{count}</code> files\n"
-                f"🕒 Time: <code>{fmt(datetime.utcnow())}</code>"
-            )
-        except:
-            pass
+    elif d.startswith("prm_exp_") or d == "prm_chart":
+        users = await db.get_premium_users()
+        valid = [(u["id"], datetime.utcfromtimestamp(e) if isinstance(e, (int, float)) else e) for u in users if u["id"] not in ADMINS and (e := u.get("plan", {}).get("expire")) and ((isinstance(e, (int, float)) and e > 0) or isinstance(e, datetime))]
+        valid = [(uid, edt) for uid, edt in valid if edt > now]
+        
+        if d.startswith("prm_exp_"):
+            limit = now + timedelta(days=int(d.split("_")[-1]))
+            res = [f"👤 <code>{uid}</code> → ⏳ {get_readable_time(int((edt - now).total_seconds()))}" for uid, edt in valid if edt <= limit][:20]
+            await safe_edit(q.message, f"⏰ <b>Expiring Soon</b>\n\n" + ("\n".join(res) if res else "✅ None found."), reply_markup=IKM([[IKB("🔙 Back", "admin_premium")]]))
             
-    except Exception as e:
-        await msg.edit(f"❌ Error: {e}")
-
+        elif d == "prm_chart":
+            days = [(edt - now).days for _, edt in valid]
+            await safe_edit(q.message, f"📊 <b>Expiry Chart</b>\n\n🟥 0-3d: <code>{sum(1 for x in days if x<=3)}</code>\n🟧 4-7d: <code>{sum(1 for x in days if 3<x<=7)}</code>\n🟨 8-30d: <code>{sum(1 for x in days if 7<x<=30)}</code>\n🟩 30d+: <code>{sum(1 for x in days if x>30)}</code>", reply_markup=IKM([[IKB("🔙 Back", "admin_premium")]]))
+    await safe_answer(q)
 
 # ======================================================
-# 🗑 DELETE ALL FILES COMMAND (Alternative)
+# 🗑 DELETE COMMANDS (Optimized)
 # ======================================================
+@Client.on_message(filters.command("delete") & filters.user(ADMINS))
+async def delete_cmd(bot, m):
+    if len(m.command) < 2: return await m.reply("❌ <b>Usage:</b> <code>/delete keyword</code>")
+    key = m.text.split(" ", 1)[1].strip()
+    msg = await m.reply(f"⏳ Deleting `{key}`...")
+    try:
+        c = await delete_files(key)
+        txt = f"✅ <b>Files Deleted</b>\n🔍 <code>{key}</code>\n🗑 Count: <code>{c}</code>\n🕒 {fmt(datetime.utcnow())}"
+        await msg.edit(txt)
+        try: await bot.send_message(LOG_CHANNEL, f"🗑 <b>Admin Deletion</b>\n👤 {m.from_user.mention}\n{txt}")
+        except: pass
+    except Exception as e: await msg.edit(f"❌ Error: {e}")
 
 @Client.on_message(filters.command("deleteall") & filters.user(ADMINS))
-async def delete_all_cmd(bot, message):
-    file_count = await asyncio.to_thread(db_count_documents)
-    
-    msg = await message.reply(
-        f"⚠️ <b>WARNING: Delete ALL Files</b>\n\n"
-        f"📦 Total Files: <code>{file_count}</code>\n\n"
-        f"❗ This will permanently delete ALL {file_count} files!\n\n"
-        "Reply with 'CONFIRM DELETE ALL' to proceed.",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("❌ Cancel", callback_data="close_data")]
-        ])
-    )
-    
+async def delete_all_cmd(bot, m):
+    msg = await m.reply(f"⚠️ <b>Delete ALL Files</b>\n❗ Irreversible! Reply `CONFIRM DELETE ALL`.", reply_markup=IKM([[IKB("❌ Cancel", "close_data")]]))
     try:
-        # Wait for confirmation reply
-        response = await bot.listen(message.chat.id, filters=filters.text, timeout=30)
-        
-        if response.text.strip().upper() == "CONFIRM DELETE ALL":
-            await response.delete()
-            await msg.edit("⏳ Deleting all files...")
-            
-            count = await delete_all_files()
-            
-            await msg.edit(
-                f"✅ <b>Successfully Deleted ALL Files</b>\n\n"
-                f"🗑 Deleted: <code>{count}</code> files\n"
-                f"🕒 Time: <code>{fmt(datetime.utcnow())}</code>"
-            )
-            
-            # Log to channel
-            try:
-                await bot.send_message(
-                    LOG_CHANNEL,
-                    f"🗑 <b>ALL FILES DELETED</b>\n\n"
-                    f"👤 Admin: {message.from_user.mention}\n"
-                    f"🗑 Deleted: <code>{count}</code> files\n"
-                    f"🕒 Time: <code>{fmt(datetime.utcnow())}</code>"
-                )
-            except:
-                pass
-        else:
-            await msg.edit("❌ Deletion cancelled - incorrect confirmation.")
-            
-    except ListenerTimeout:
-        await msg.edit("❌ Deletion cancelled - timeout (30s).")
-    except Exception as e:
-        await msg.edit(f"❌ Error: {e}")
-
-
-# ======================================================
-# 🔐 CLOSE CALLBACK
-# ======================================================
-
-@Client.on_callback_query(filters.regex("^close_data$"))
-async def close_callback(_, query: CallbackQuery):
-    await query.message.delete()
-    await safe_answer(query, "✅ Closed")
+        res = await bot.listen(m.chat.id, filters=filters.text, timeout=30)
+        if res.text.strip().upper() == "CONFIRM DELETE ALL":
+            await res.delete(); await msg.edit("⏳ Deleting...")
+            c = await delete_all_files()
+            txt = f"✅ <b>ALL Files Deleted</b>\n🗑 Count: <code>{c}</code>\n🕒 {fmt(datetime.utcnow())}"
+            await msg.edit(txt)
+            try: await bot.send_message(LOG_CHANNEL, f"🗑 <b>Admin Purge</b>\n👤 {m.from_user.mention}\n{txt}")
+            except: pass
+        else: await msg.edit("❌ Cancelled - incorrect confirmation.")
+    except ListenerTimeout: await msg.edit("❌ Cancelled - timeout.")
