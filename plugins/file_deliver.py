@@ -1,374 +1,145 @@
-import asyncio
-import time
-import logging
+import asyncio, time, logging
 from datetime import datetime, timedelta
 
 from hydrogram import Client, filters
-from hydrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from hydrogram.types import InlineKeyboardMarkup as IKM, InlineKeyboardButton as IKB, CallbackQuery
 
 from info import IS_STREAM, PM_FILE_DELETE_TIME, PROTECT_CONTENT, ADMINS
 from database.ia_filterdb import get_file_details
 from database.users_chats_db import db
-from utils import get_settings, get_size, temp, is_premium
-
+from utils import get_size, temp, is_premium
 
 # ======================================================
-# CONFIG
+# ⚙️ CONFIG & GLOBAL VARIABLES
 # ======================================================
-GRACE_PERIOD = timedelta(minutes=30)
-RESEND_EXPIRE_TIME = 60  # seconds
-
-# Track active deletion tasks
 active_tasks = {}
 
+PREM_TXT = (
+    "🔒 <b>Premium Required</b>\n\n"
+    "PM file access is only available for premium users.\n\n"
+    "💎 Get unlimited search access\n"
+    "⚡ Faster responses\n"
+    "🎯 Priority support\n\n"
+    "Upgrade now to unlock this feature!"
+)
+
+prem_btn = lambda: IKM([[IKB("💰 Buy / Renew Premium", "buy_premium")], [IKB("❌ Close", "close_data")]])
 
 # ======================================================
-# PREMIUM CHECK WITH GRACE PERIOD
+# 🧠 PREMIUM CHECKER (WITH GRACE PERIOD)
 # ======================================================
-async def has_premium_or_grace(user_id: int) -> bool:
-    """Check if user is admin or has premium with grace period"""
-    if user_id in ADMINS:
-        return True
-
-    plan = await db.get_plan(user_id)
-    if not plan or not plan.get("premium"):
-        return False
-
-    expire = plan.get("expire")
-    if isinstance(expire, (int, float)):
-        expire = datetime.utcfromtimestamp(expire)
-
-    return bool(expire and datetime.utcnow() <= expire + GRACE_PERIOD)
-
+async def has_premium_or_grace(uid: int) -> bool:
+    if uid in ADMINS: return True
+    p = await db.get_plan(uid)
+    if not p or not p.get("premium"): return False
+    
+    e = p.get("expire")
+    e_dt = datetime.utcfromtimestamp(e) if isinstance(e, (int, float)) else e
+    return bool(e_dt and datetime.utcnow() <= e_dt + timedelta(minutes=30))
 
 # ======================================================
-# FILE BUTTON HANDLER (GROUP)
+# 📁 FILE BUTTON HANDLER (GROUP)
 # ======================================================
 @Client.on_callback_query(filters.regex(r"^file#"))
-async def file_button_handler(client: Client, query: CallbackQuery):
-    """Handle file button clicks in groups"""
-    _, file_id = query.data.split("#", 1)
+async def file_button_handler(c: Client, q: CallbackQuery):
+    file_id = q.data.split("#", 1)[1]
+    
+    if not await get_file_details(file_id):
+        return await q.answer("❌ File not found", show_alert=True)
 
-    # Get file details
-    file = await get_file_details(file_id)
-    if not file:
-        return await query.answer("❌ File not found", show_alert=True)
-
-    uid = query.from_user.id
-    group_id = query.message.chat.id
-    
-    # Get group settings
-    settings = await get_settings(group_id)
-    
-    # ========================================
-    # PREMIUM CHECK (Bot Admin or Premium User)
-    # ========================================
-    is_user_premium = await has_premium_or_grace(uid)
-    
-    # Premium users (Bot Admin + Premium) get direct PM link
-    if is_user_premium:
-        await query.answer(
-            url=f"https://t.me/{temp.U_NAME}?start=file_{group_id}_{file_id}"
-        )
-        return
-    
-    # ========================================
-    # NON-PREMIUM: Show Premium Required Message
-    # ========================================
-    text = (
-        "🔒 <b>Premium Required</b>\n\n"
-        "PM search is only available for premium users.\n\n"
-        "💎 Get unlimited search access\n"
-        "⚡ Faster responses\n"
-        "🎯 Priority support\n\n"
-        "Upgrade now to unlock this feature!"
-    )
-    
-    btn = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(
-                "💰 Buy / Renew Premium",
-                callback_data="buy_premium"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "❌ Close",
-                callback_data="close_data"
-            )
-        ]
-    ])
-    
-    # Send premium required message
-    await query.message.reply_text(
-        text,
-        reply_markup=btn,
-        quote=True
-    )
-    
-    await query.answer(
-        "🔒 Premium required for PM file access",
-        show_alert=True
-    )
-
+    if await has_premium_or_grace(q.from_user.id):
+        await q.answer(url=f"https://t.me/{temp.U_NAME}?start=file_{q.message.chat.id}_{file_id}")
+    else:
+        await q.message.reply_text(PREM_TXT, reply_markup=prem_btn(), quote=True)
+        await q.answer("🔒 Premium required", show_alert=True)
 
 # ======================================================
-# START FILE DELIVERY (PM)
+# 🚀 START FILE DELIVERY (PM)
 # ======================================================
-@Client.on_message(
-    filters.private &
-    filters.command("start") &
-    filters.regex(r"file_"),
-    group=1  # Higher priority
-)
-async def start_file_delivery(client: Client, message):
-    """Handle /start file_ commands in PM"""
-    try:
-        # Parse file command
-        _, grp_id, file_id = message.text.split("_", 2)
-        grp_id = int(grp_id)
-    except Exception:
+@Client.on_message(filters.private & filters.command("start") & filters.regex(r"file_"), group=1)
+async def start_file_delivery(c: Client, m):
+    try: _, grp_id, file_id = m.text.split("_", 2)
+    except: return
+
+    uid = m.from_user.id
+    if not await has_premium_or_grace(uid):
+        await m.reply_text(PREM_TXT, reply_markup=prem_btn())
+        try: await m.delete()
+        except: pass
         return
 
-    uid = message.from_user.id
-    
-    # ========================================
-    # PREMIUM CHECK (Bot Admin or Premium)
-    # ========================================
-    is_user_premium = await has_premium_or_grace(uid)
-    
-    if not is_user_premium:
-        # Non-premium user tried to access file directly
-        text = (
-            "🔒 <b>Premium Required</b>\n\n"
-            "Direct file access is only available for premium users.\n\n"
-            "💎 Get unlimited search access\n"
-            "⚡ Faster responses\n"
-            "🎯 Priority support\n\n"
-            "Upgrade now to unlock this feature!"
-        )
-        
-        btn = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton(
-                    "💰 Buy / Renew Premium",
-                    callback_data="buy_premium"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "❌ Close",
-                    callback_data="close_data"
-                )
-            ]
-        ])
-        
-        await message.reply_text(text, reply_markup=btn)
-        
-        # Delete /start command
-        try:
-            await message.delete()
-        except:
-            pass
-        return
-    
-    # ========================================
-    # DELIVER FILE TO PREMIUM USER
-    # ========================================
-    # Cancel previous file task for this user
-    user_task_key = f"user_{uid}"
-    if user_task_key in active_tasks:
-        active_tasks[user_task_key].cancel()
+    ukey = f"user_{uid}"
+    if ukey in active_tasks: active_tasks[ukey].cancel()
 
-    # Create new delivery task
-    task = asyncio.create_task(
-        deliver_file(client, uid, grp_id, file_id)
-    )
-    active_tasks[user_task_key] = task
+    t = asyncio.create_task(deliver_file(c, uid, int(grp_id), file_id))
+    active_tasks[ukey] = t
+    t.add_done_callback(lambda _: active_tasks.pop(ukey, None))
 
-    # Cleanup callback
-    def cleanup_task(t):
-        active_tasks.pop(user_task_key, None)
-    
-    task.add_done_callback(cleanup_task)
-
-    # Delete /start command
-    try:
-        await message.delete()
-    except:
-        pass
-
+    try: await m.delete()
+    except: pass
 
 # ======================================================
-# SCHEDULE FILE DELETION
+# 🗑 AUTO DELETION SCHEDULER
 # ======================================================
-async def schedule_file_deletion(client, sent_msg, uid, file_id):
-    """Schedule auto-deletion of file message"""
-    msg_id = sent_msg.id
+async def schedule_file_deletion(c, sent_msg, uid, file_id):
+    mid = sent_msg.id
+    if not hasattr(temp, 'FILES'): temp.FILES = {}
     
-    # Check if temp.FILES exists
-    if not hasattr(temp, 'FILES'):
-        temp.FILES = {}
-    
-    # Track in temp storage
-    temp.FILES[msg_id] = {
-        "owner": uid,
-        "file_id": file_id,
-        "expire": int(time.time()) + PM_FILE_DELETE_TIME
-    }
+    temp.FILES[mid] = {"owner": uid, "file_id": file_id, "expire": int(time.time()) + PM_FILE_DELETE_TIME}
     
     try:
-        # Wait for expiry
         await asyncio.sleep(PM_FILE_DELETE_TIME)
+        if not temp.FILES.pop(mid, None): return
         
-        # Remove from tracking
-        data = temp.FILES.pop(msg_id, None)
-        if not data:
-            return
+        try: await sent_msg.delete()
+        except: pass
         
-        # Delete the file message
-        try:
-            await sent_msg.delete()
-        except:
-            pass
-        
-        # Send resend button
-        resend = await client.send_message(
-            uid,
-            "⌛ <b>File expired</b>",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton(
-                    "🔁 Resend File",
-                    callback_data=f"resend#{file_id}"
-                )]
-            ])
-        )
-        
-        # Auto-delete resend button
-        await asyncio.sleep(RESEND_EXPIRE_TIME)
-        try:
-            await resend.delete()
-        except:
-            pass
+        resend = await c.send_message(uid, "⌛ <b>File expired</b>", reply_markup=IKM([[IKB("🔁 Resend File", f"resend#{file_id}")]]))
+        await asyncio.sleep(60) # RESEND_EXPIRE_TIME
+        try: await resend.delete()
+        except: pass
             
     except asyncio.CancelledError:
-        # Task cancelled, cleanup
-        temp.FILES.pop(msg_id, None)
+        temp.FILES.pop(mid, None)
         raise
 
-
 # ======================================================
-# CORE FILE DELIVERY
+# 📥 CORE FILE DELIVERY
 # ======================================================
-async def deliver_file(client, uid, grp_id, file_id):
-    """Deliver file to premium user in PM"""
+async def deliver_file(c, uid, grp_id, file_id):
     try:
-        # Get file details
         file = await get_file_details(file_id)
-        if not file:
-            return
+        if not file: return
 
-        # Verify premium status again (security check)
         if not await has_premium_or_grace(uid):
-            text = (
-                "🔒 <b>Premium Required</b>\n\n"
-                "This file is only accessible to premium users.\n\n"
-                "💎 Get unlimited search access\n"
-                "⚡ Faster responses\n"
-                "🎯 Priority support\n\n"
-                "Upgrade now to unlock this feature!"
-            )
-            
-            btn = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton(
-                        "💰 Buy / Renew Premium",
-                        callback_data="buy_premium"
-                    )
-                ]
-            ])
-            
-            await client.send_message(uid, text, reply_markup=btn)
-            return
+            return await c.send_message(uid, PREM_TXT, reply_markup=prem_btn())
 
-        # Get group settings (for additional checks)
-        settings = await get_settings(grp_id) if grp_id else {}
+        fn, fc = (file.get("file_name") or "").strip(), (file.get("caption") or "").strip()
+        cap = f"{fn}\n\n{fc}" if fc and fc != fn else fn
 
-        # Build caption
-        file_name = (file.get("file_name") or "").strip()
-        file_caption = (file.get("caption") or "").strip()
+        btns = [[IKB("▶️ Watch / Download", f"stream#{file_id}")]] if IS_STREAM else []
+        btns.append([IKB("❌ Close", "close_data")])
 
-        if not file_caption or file_caption == file_name:
-            caption = file_name
-        else:
-            caption = f"{file_name}\n\n{file_caption}"
+        sent = await c.send_cached_media(chat_id=uid, file_id=file_id, caption=cap, protect_content=PROTECT_CONTENT, reply_markup=IKM(btns))
 
-        # Build buttons
-        buttons = []
-        if IS_STREAM:
-            buttons.append([
-                InlineKeyboardButton(
-                    "▶️ Watch / Download",
-                    callback_data=f"stream#{file_id}"
-                )
-            ])
-        buttons.append([
-            InlineKeyboardButton("❌ Close", callback_data="close_data")
-        ])
-
-        markup = InlineKeyboardMarkup(buttons)
-
-        # Send file
-        sent = await client.send_cached_media(
-            chat_id=uid,
-            file_id=file_id,
-            caption=caption,
-            protect_content=PROTECT_CONTENT,
-            reply_markup=markup
-        )
-
-        # Schedule deletion
-        deletion_task = asyncio.create_task(
-            schedule_file_deletion(client, sent, uid, file_id)
-        )
-        
-        # Track deletion task
-        task_key = f"delete_{sent.id}"
-        active_tasks[task_key] = deletion_task
-        
-        # Cleanup callback
-        def cleanup_deletion(t):
-            active_tasks.pop(task_key, None)
-        
-        deletion_task.add_done_callback(cleanup_deletion)
+        tkey = f"del_{sent.id}"
+        t = asyncio.create_task(schedule_file_deletion(c, sent, uid, file_id))
+        active_tasks[tkey] = t
+        t.add_done_callback(lambda _: active_tasks.pop(tkey, None))
         
     except Exception as e:
         logging.error(f"Error delivering file: {e}")
 
-
 # ======================================================
-# RESEND HANDLER
+# 🔁 RESEND HANDLER
 # ======================================================
 @Client.on_callback_query(filters.regex(r"^resend#"))
-async def resend_handler(client, query: CallbackQuery):
-    """Handle resend file button"""
-    file_id = query.data.split("#", 1)[1]
-    uid = query.from_user.id
+async def resend_handler(c, q: CallbackQuery):
+    uid = q.from_user.id
+    if not await has_premium_or_grace(uid): return await q.answer("🔒 Premium required", show_alert=True)
 
-    # Verify premium status
-    if not await has_premium_or_grace(uid):
-        return await query.answer(
-            "🔒 Premium required to resend files",
-            show_alert=True
-        )
+    await q.answer()
+    try: await q.message.delete()
+    except: pass
 
-    await query.answer()
-    
-    # Delete resend message
-    try:
-        await query.message.delete()
-    except:
-        pass
-
-    # Resend file
-    asyncio.create_task(deliver_file(client, uid, 0, file_id))
+    asyncio.create_task(deliver_file(c, uid, 0, q.data.split("#", 1)[1]))
