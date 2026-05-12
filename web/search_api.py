@@ -8,9 +8,19 @@ from database.ia_filterdb import get_search_results
 
 search_routes = web.RouteTableDef()
 
+# 🌟 NEW: Updated Authentication Logic (Supports Admin + Public Users)
 def is_auth(req):
-    s = req.cookies.get('admin_session')
-    return bool(s and hasattr(temp, 'ADMIN_SESSIONS') and temp.ADMIN_SESSIONS.get(s, 0) > time.time())
+    # 1. Check Admin Session
+    admin_s = req.cookies.get('admin_session')
+    if admin_s and hasattr(temp, 'ADMIN_SESSIONS') and temp.ADMIN_SESSIONS.get(admin_s, 0) > time.time():
+        return True
+        
+    # 2. Check Public User Session (Subscribed & Logged In)
+    user_s = req.cookies.get('user_session')
+    if user_s and hasattr(temp, 'PUBLIC_SESSIONS') and temp.PUBLIC_SESSIONS.get(user_s, {}).get("expire", 0) > time.time():
+        return True
+        
+    return False
 
 @search_routes.get('/api/search')
 async def api_search(req):
@@ -24,7 +34,7 @@ async def api_search(req):
     
     off = int(off) if off.isdigit() else 0
     
-    # 🚀 USE ULTRA-FAST DB SEARCH (Replaced old slow regex loop)
+    # 🚀 USE ULTRA-FAST DB SEARCH
     files, next_offset, tot = await get_search_results(q, offset=off, max_results=20)
     
     res = []
@@ -47,7 +57,7 @@ async def api_search(req):
 
 @search_routes.get('/setup_stream')
 async def setup_stream(req):
-    if not is_auth(req): return web.Response(text="❌ Unauthorized Access!", status=403)
+    if not is_auth(req): return web.Response(text="❌ Unauthorized Access! Please Login.", status=403)
     
     fid, mode = req.query.get('file_id'), req.query.get('mode', 'watch')
     if not fid: return web.Response(text="Invalid Request", status=400)
