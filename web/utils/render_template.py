@@ -131,14 +131,15 @@ watch_tmplt = """
         .skip-zone {{
             position: absolute;
             top: 0;
-            bottom: 60px; /* Prevent blocking bottom controls */
-            width: 35%;
+            bottom: 25%; /* कंट्रोल्स से सुरक्षित दूरी */
+            width: 40%;
             z-index: 20;
             display: flex;
             align-items: center;
             justify-content: center;
             cursor: pointer;
             -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation; /* मोबाइल पर डबल-टैप ज़ूम को रोकता है */
         }}
         
         .skip-zone.left {{ left: 0; }}
@@ -454,6 +455,12 @@ watch_tmplt = """
                     }}, 600); // Wait bit longer after last tap before hiding UI
                 }}
             }}
+
+            // एक्स्ट्रा क्लिक और डबल-क्लिक इवेंट्स को प्लेयर तक जाने से रोकें
+            ['dblclick', 'click'].forEach(evt => {{
+                leftZone.addEventListener(evt, (e) => {{ e.preventDefault(); e.stopPropagation(); }});
+                rightZone.addEventListener(evt, (e) => {{ e.preventDefault(); e.stopPropagation(); }});
+            }});
 
             leftZone.addEventListener('pointerup', (e) => handleTap(e, 'left', leftZone));
             rightZone.addEventListener('pointerup', (e) => handleTap(e, 'right', rightZone));
