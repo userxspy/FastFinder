@@ -5,7 +5,7 @@ from utils import temp
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────
-# 🎬 FAST FINDER OPTIMIZED STREAM TEMPLATE (WITH THEME TOGGLE)
+# 🎬 FAST FINDER OPTIMIZED STREAM TEMPLATE (WITH THEME TOGGLE & AUTO LANDSCAPE)
 # ─────────────────────────────────────────────
 watch_tmplt = """<!DOCTYPE html>
 <html lang="en" data-theme="dark">
@@ -87,6 +87,19 @@ themeBtn.addEventListener('click',()=>{{
 
 // PLAYER & SKIP LOGIC
 const player=new Plyr('#player',{{controls:['play-large','play','progress','current-time','mute','settings','pip','fullscreen'],settings:['quality','speed'],autoplay:!1,doubleClick:{{togglesFullscreen:!1}}}});
+
+// AUTO LANDSCAPE ON FULLSCREEN
+player.on('enterfullscreen', ()=>{{
+    if(screen.orientation && screen.orientation.lock) {{
+        screen.orientation.lock('landscape').catch(e => console.log(e));
+    }}
+}});
+player.on('exitfullscreen', ()=>{{
+    if(screen.orientation && screen.orientation.unlock) {{
+        screen.orientation.unlock();
+    }}
+}});
+
 player.on('ready',()=>{{
     const c=document.querySelector('.plyr'), l=document.createElement('div'), r=document.createElement('div');
     l.className='skip-zone left'; r.className='skip-zone right';
