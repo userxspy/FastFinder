@@ -171,3 +171,33 @@ async def delete_all_cmd(bot, m):
             except: pass
         else: await msg.edit("❌ Cancelled - incorrect confirmation.")
     except ListenerTimeout: await msg.edit("❌ Cancelled - timeout.")
+
+# ======================================================
+# 🛠️ PREMIUM EXPIRY BUG FIX COMMAND
+# ======================================================
+@Client.on_message(filters.command("fix_premium") & filters.user(ADMINS))
+async def fix_premium_bug(client, message):
+    from bson.objectid import ObjectId  # ObjectId को हैंडल करने के लिए
+    
+    msg = await message.reply("⏳ एक्सपायरी बग फिक्स कर रहा हूँ...")
+    try:
+        # लॉग्स में दिखने वाली दोनों बग वाली IDs
+        buggy_ids = [
+            ObjectId("6948e2eb0fcb2bcfc0b9c3a7"), 
+            ObjectId("694cd3f30fcb2bcfc0bb100a")
+        ]
+        
+        # उनके प्रीमियम स्टेटस और एक्सपायरी डेट को हमेशा के लिए क्लियर करना
+        res = await db.users.update_many(
+            {"_id": {"$in": buggy_ids}},
+            {"$set": {"premium": False, "plan": None, "expire": None}}
+        )
+        
+        await msg.edit(
+            f"✅ **बग फिक्स हो गया!**\n"
+            f"डेटाबेस में {res.modified_count} यूज़र्स का डेटा क्लीन हो गया है।\n"
+            f"अब बॉट रीस्टार्ट होने पर वो फालतू मैसेज नहीं आएगा।"
+        )
+    except Exception as e:
+        await msg.edit(f"❌ Error: {e}")
+
