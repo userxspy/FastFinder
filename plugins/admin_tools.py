@@ -173,31 +173,36 @@ async def delete_all_cmd(bot, m):
     except ListenerTimeout: await msg.edit("❌ Cancelled - timeout.")
 
 # ======================================================
-# 🛠️ PREMIUM EXPIRY BUG FIX COMMAND
+# 🛠️ PREMIUM EXPIRY BUG FIX COMMAND (V2 - Bulletproof)
 # ======================================================
 @Client.on_message(filters.command("fix_premium") & filters.user(ADMINS))
 async def fix_premium_bug(client, message):
-    from bson.objectid import ObjectId  # ObjectId को हैंडल करने के लिए
+    from bson.objectid import ObjectId
+    msg = await message.reply("⏳ एक्सपायरी बग फिक्स कर रहा हूँ (Take 2)...")
     
-    msg = await message.reply("⏳ एक्सपायरी बग फिक्स कर रहा हूँ...")
     try:
-        # लॉग्स में दिखने वाली दोनों बग वाली IDs
+        # ObjectId और String दोनों फॉर्मेट डाल दिए ताकि बचने का कोई चांस न रहे!
         buggy_ids = [
             ObjectId("6948e2eb0fcb2bcfc0b9c3a7"), 
-            ObjectId("694cd3f30fcb2bcfc0bb100a")
+            ObjectId("694cd3f30fcb2bcfc0bb100a"),
+            "6948e2eb0fcb2bcfc0b9c3a7",
+            "694cd3f30fcb2bcfc0bb100a"
         ]
         
-        # उनके प्रीमियम स्टेटस और एक्सपायरी डेट को हमेशा के लिए क्लियर करना
-        res = await db.users.update_many(
+        # 1. Premium कलेक्शन से हमेशा के लिए डिलीट करना
+        res_prem = await db.premium.delete_many({"_id": {"$in": buggy_ids}})
+        
+        # 2. Users कलेक्शन में भी चेक करके अपडेट कर देना
+        res_user = await db.users.update_many(
             {"_id": {"$in": buggy_ids}},
             {"$set": {"premium": False, "plan": None, "expire": None}}
         )
         
         await msg.edit(
-            f"✅ **बग फिक्स हो गया!**\n"
-            f"डेटाबेस में {res.modified_count} यूज़र्स का डेटा क्लीन हो गया है।\n"
-            f"अब बॉट रीस्टार्ट होने पर वो फालतू मैसेज नहीं आएगा।"
+            f"✅ **बग पक्का फिक्स हो गया!** 😎\n\n"
+            f"🗑 Premium से डिलीट हुए: {res_prem.deleted_count}\n"
+            f"🔄 Users में अपडेट हुए: {res_user.modified_count}\n\n"
+            f"अब आप बॉट रीस्टार्ट करेंगे तो वो फालतू मैसेज 100% नहीं आएगा।"
         )
     except Exception as e:
         await msg.edit(f"❌ Error: {e}")
-
