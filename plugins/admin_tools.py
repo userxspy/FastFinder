@@ -173,36 +173,44 @@ async def delete_all_cmd(bot, m):
     except ListenerTimeout: await msg.edit("❌ Cancelled - timeout.")
 
 # ======================================================
-# 🛠️ PREMIUM EXPIRY BUG FIX COMMAND (V2 - Bulletproof)
+# ☢️ NUCLEAR BUG FIX (Finds & Deletes from EVERYWHERE)
 # ======================================================
-@Client.on_message(filters.command("fix_premium") & filters.user(ADMINS))
-async def fix_premium_bug(client, message):
+@Client.on_message(filters.command("nuke_bug") & filters.user(ADMINS))
+async def nuke_bug(client, message):
+    msg = await message.reply("🚀 न्यूक्लियर मिसाइल लॉन्च हो रही है... डेटाबेस का कोना-कोना छान रहा हूँ!")
     from bson.objectid import ObjectId
-    msg = await message.reply("⏳ एक्सपायरी बग फिक्स कर रहा हूँ (Take 2)...")
     
     try:
-        # ObjectId और String दोनों फॉर्मेट डाल दिए ताकि बचने का कोई चांस न रहे!
-        buggy_ids = [
+        # 🎯 टारगेट लॉक
+        targets = [
             ObjectId("6948e2eb0fcb2bcfc0b9c3a7"), 
             ObjectId("694cd3f30fcb2bcfc0bb100a"),
             "6948e2eb0fcb2bcfc0b9c3a7",
             "694cd3f30fcb2bcfc0bb100a"
         ]
         
-        # 1. Premium कलेक्शन से हमेशा के लिए डिलीट करना
-        res_prem = await db.premium.delete_many({"_id": {"$in": buggy_ids}})
+        # 🗄️ रॉ डेटाबेस एक्सेस करना (Motor Client)
+        raw_db = db.users.database 
+        collections = await raw_db.list_collection_names()
         
-        # 2. Users कलेक्शन में भी चेक करके अपडेट कर देना
-        res_user = await db.users.update_many(
-            {"_id": {"$in": buggy_ids}},
-            {"$set": {"premium": False, "plan": None, "expire": None}}
-        )
+        total_deleted = 0
+        
+        # 🕵️‍♂️ हर एक कलेक्शन में घुसकर सफाया करना
+        for col_name in collections:
+            res = await raw_db[col_name].delete_many({
+                "$or": [
+                    {"_id": {"$in": targets}},
+                    {"id": {"$in": targets}},
+                    {"user_id": {"$in": targets}}
+                ]
+            })
+            total_deleted += res.deleted_count
         
         await msg.edit(
-            f"✅ **बग पक्का फिक्स हो गया!** 😎\n\n"
-            f"🗑 Premium से डिलीट हुए: {res_prem.deleted_count}\n"
-            f"🔄 Users में अपडेट हुए: {res_user.modified_count}\n\n"
-            f"अब आप बॉट रीस्टार्ट करेंगे तो वो फालतू मैसेज 100% नहीं आएगा।"
+            f"✅ **मिशन सक्सेसफुल! 💥**\n\n"
+            f"🗂 चेक किए गए कलेक्शन्स: {len(collections)}\n"
+            f"🗑 डिलीट हुए जिद्दी डेटा: **{total_deleted}**\n\n"
+            f"इन दोनों को डेटाबेस के हर कोने से मिटा दिया गया है! 😎"
         )
     except Exception as e:
         await msg.edit(f"❌ Error: {e}")
