@@ -171,3 +171,16 @@ async def delete_all_cmd(bot, m):
             except: pass
         else: await msg.edit("❌ Cancelled - incorrect confirmation.")
     except ListenerTimeout: await msg.edit("❌ Cancelled - timeout.")
+
+# ======================================================
+# 🛠️ DATABASE FIX COMMAND (DUPLICATE REMOVER)
+# ======================================================
+@Client.on_message(filters.command("fix_db") & filters.user(ADMINS))
+async def fix_duplicate_db(client, message):
+    msg = await message.reply("⏳ डेटाबेस फिक्स कर रहा हूँ...")
+    try:
+        # डुप्लीकेट ID को डिलीट करना
+        await db.users.delete_one({"id": 5292444428})
+        await msg.edit("✅ **डुप्लीकेट यूज़र सफलतापूर्वक डिलीट कर दिया गया है!**\nअब आप अगली बार बॉट रीस्टार्ट करेंगे तो Koyeb में कोई Error नहीं आएगा।")
+    except Exception as e:
+        await msg.edit(f"❌ Error: {e}")
